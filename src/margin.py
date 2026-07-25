@@ -45,7 +45,11 @@ def _require_datetime(df: pd.DataFrame, col: str) -> None:
         )
 
 
-def _period_month(dates: pd.Series) -> pd.Series:
+def period_month(dates: pd.Series) -> pd.Series:
+    """First-of-month timestamp for each date - the join key against
+    schema.OVERHEAD_SCHEMA's period_month column. Shared with slice.py
+    so both group by the same month buckets.
+    """
     return dates.dt.to_period("M").dt.to_timestamp()
 
 
@@ -73,7 +77,7 @@ def _allocate_overhead(df: pd.DataFrame, overhead_df: pd.DataFrame, weight_col: 
     share and yields null for every row in that period, rather than a
     divide-by-zero or a silently wrong number.
     """
-    period = _period_month(df[schema.TXN_DATE])
+    period = period_month(df[schema.TXN_DATE])
     period_total_weight = df.groupby(period)[weight_col].transform("sum")
     safe_weight = period_total_weight.where(period_total_weight > 0, np.nan)
     weight_share = df[weight_col] / safe_weight

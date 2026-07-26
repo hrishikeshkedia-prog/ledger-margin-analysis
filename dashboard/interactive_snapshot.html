@@ -1,0 +1,1080 @@
+<title>Ledger Margin Analysis — Interactive</title>
+<style>
+  :root {
+    color-scheme: light;
+    --ink: #1b2430;
+    --ink-soft: #4b5563;
+    --muted: #7a8073;
+    --paper: #eef1ec;
+    --panel: #f8f9f6;
+    --hairline: #c9cdc2;
+    --hairline-soft: #dde0d7;
+    --brass: #b8863b;
+    --brass-ink: #7d5a24;
+    --brass-wash: rgba(184, 134, 59, 0.12);
+    --focus: #2a78d6;
+
+    --series-revenue: #2a78d6;
+    --series-cost: #eb6834;
+    --series-margin: #1baf7a;
+    --series-margin-wash: rgba(27, 175, 122, 0.12);
+
+    --status-good: #0ca30c;
+    --status-critical: #d03b3b;
+
+    --shadow: 0 1px 2px rgba(27, 36, 48, 0.06), 0 8px 24px -12px rgba(27, 36, 48, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --ink: #e8ebe4;
+      --ink-soft: #b7bdb0;
+      --muted: #8b9285;
+      --paper: #12161c;
+      --panel: #171c22;
+      --hairline: #2a2f35;
+      --hairline-soft: #232830;
+      --brass: #d6a35f;
+      --brass-ink: #d6a35f;
+      --brass-wash: rgba(214, 163, 95, 0.14);
+      --focus: #6db2ff;
+
+      --series-revenue: #3987e5;
+      --series-cost: #d95926;
+      --series-margin: #199e70;
+      --series-margin-wash: rgba(25, 158, 112, 0.16);
+
+      --status-good: #2fd12f;
+      --status-critical: #ef6262;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ink: #e8ebe4;
+    --ink-soft: #b7bdb0;
+    --muted: #8b9285;
+    --paper: #12161c;
+    --panel: #171c22;
+    --hairline: #2a2f35;
+    --hairline-soft: #232830;
+    --brass: #d6a35f;
+    --brass-ink: #d6a35f;
+    --brass-wash: rgba(214, 163, 95, 0.14);
+    --focus: #6db2ff;
+    --series-revenue: #3987e5;
+    --series-cost: #d95926;
+    --series-margin: #199e70;
+    --series-margin-wash: rgba(25, 158, 112, 0.16);
+    --status-good: #2fd12f;
+    --status-critical: #ef6262;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ink: #1b2430;
+    --ink-soft: #4b5563;
+    --muted: #7a8073;
+    --paper: #eef1ec;
+    --panel: #f8f9f6;
+    --hairline: #c9cdc2;
+    --hairline-soft: #dde0d7;
+    --brass: #b8863b;
+    --brass-ink: #7d5a24;
+    --brass-wash: rgba(184, 134, 59, 0.12);
+    --focus: #2a78d6;
+    --series-revenue: #2a78d6;
+    --series-cost: #eb6834;
+    --series-margin: #1baf7a;
+    --series-margin-wash: rgba(27, 175, 122, 0.12);
+    --status-good: #0ca30c;
+    --status-critical: #d03b3b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  a { color: inherit; }
+  select {
+    font: inherit;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 7px;
+    padding: 7px 10px;
+  }
+  select:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 20px 16px 48px;
+  }
+
+  /* ---------- header ---------- */
+  .masthead {
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    padding: 20px 20px 18px;
+    margin-bottom: 14px;
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--brass-ink);
+  }
+  .eyebrow::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--brass);
+    flex: none;
+  }
+  .masthead h1 {
+    font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin-top: 10px;
+  }
+  .masthead .meta {
+    margin-top: 10px;
+    color: var(--ink-soft);
+    font-size: 13.5px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+  }
+  .masthead .meta strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- controls bar ---------- */
+  .controlsbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    padding: 12px 16px;
+    margin-bottom: 14px;
+  }
+  .controlsbar label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .controlsbar .hint {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-left: auto;
+  }
+
+  /* ---------- KPI row ---------- */
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--hairline);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .kpi {
+    background: var(--panel);
+    padding: 14px 16px 15px;
+  }
+  .kpi .label {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .kpi .value {
+    margin-top: 5px;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+  }
+  .kpi .sub {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+    display: inline-block;
+  }
+  .dot.good { background: var(--status-good); }
+  .dot.critical { background: var(--status-critical); }
+
+  .footnote {
+    font-size: 12.5px;
+    color: var(--muted);
+    border: 1px dashed var(--hairline);
+    border-radius: 8px;
+    padding: 10px 13px;
+    margin-bottom: 26px;
+    line-height: 1.55;
+  }
+  .footnote strong { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---------- sections ---------- */
+  section.panel {
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    padding: 18px 18px 8px;
+    margin-bottom: 20px;
+  }
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--hairline-soft);
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+  .panel-head h2 {
+    font-size: 1.02rem;
+    font-weight: 700;
+  }
+  .panel-head .hint {
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  /* legend */
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+  }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .key { width: 14px; height: 2px; border-radius: 2px; }
+  .legend .key.area { width: 12px; height: 12px; border-radius: 3px; opacity: 0.9; }
+
+  /* local controls within a section (concentration) */
+  .subcontrols {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    font-size: 12.5px;
+  }
+  .subcontrols .field { display: flex; align-items: center; gap: 7px; }
+  .subcontrols input[type="range"] { width: 130px; accent-color: var(--series-revenue); }
+  .subcontrols .rangeval { font-weight: 700; min-width: 22px; display: inline-block; }
+
+  /* ---------- HTML bar rows (customer / route / strategy) ---------- */
+  .barlist { display: flex; flex-direction: column; gap: 9px; margin-bottom: 4px; }
+  .barlist.scroll { max-height: 380px; overflow-y: auto; padding-right: 6px; margin-right: -6px; }
+  .barrow {
+    display: grid;
+    grid-template-columns: 92px 1fr 92px;
+    align-items: center;
+    gap: 10px;
+  }
+  .barrow .rlabel {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    line-height: 1.35;
+    overflow: hidden;
+  }
+  .barrow .rlabel, .barrow .rlabel .mono {
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .barrow .rlabel .mono { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+  .track {
+    position: relative;
+    height: 22px;
+    background: var(--hairline-soft);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 5px;
+    outline-offset: 2px;
+    cursor: default;
+  }
+  .fill:focus-visible, .segment:focus-visible, .hoverzone:focus-visible { outline: 2px solid var(--focus); }
+  .barrow .rvalue {
+    font-size: 12.5px;
+    font-weight: 600;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .barrow .rvalue .sub { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+
+  .strategy-group { border-top: 1px solid var(--hairline-soft); padding: 12px 0; }
+  .strategy-group:first-child { border-top: none; padding-top: 2px; }
+  .strategy-group.active { background: var(--brass-wash); border-radius: 8px; margin: 0 -8px; padding: 12px 8px; border-top-color: transparent; }
+  .strategy-group .gname { font-size: 13px; font-weight: 700; margin-bottom: 8px; display:flex; align-items:center; gap:8px;}
+  .nullpill {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--status-critical) 14%, transparent);
+    color: var(--status-critical);
+  }
+  .activepill {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--brass-wash);
+    color: var(--brass-ink);
+    border: 1px solid color-mix(in srgb, var(--brass) 45%, transparent);
+  }
+
+  /* ---------- table ---------- */
+  .tablewrap { overflow-x: auto; margin: 4px 0 18px; }
+  .tablewrap.scroll { max-height: 340px; overflow-y: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 13px; }
+  thead th {
+    text-align: right;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--hairline);
+    white-space: nowrap;
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+  thead th:first-child, tbody td:first-child { text-align: left; }
+  tbody td {
+    text-align: right;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--hairline-soft);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  thead th:first-child, tbody td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--panel);
+  }
+  thead th:first-child { z-index: 3; }
+
+  /* ---------- month chart (svg) ---------- */
+  .chartbox { position: relative; }
+  .chartbox svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .gridline { stroke: var(--hairline); stroke-width: 1; }
+  .axislabel { fill: var(--muted); font-size: 10.5px; font-family: system-ui, sans-serif; }
+  .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; pointer-events: none; }
+
+  /* ---------- concentration strip ---------- */
+  .strip {
+    display: flex;
+    height: 40px;
+    border-radius: 6px;
+    overflow: hidden;
+    gap: 2px;
+    margin-bottom: 10px;
+  }
+  .segment {
+    background: var(--series-revenue);
+    height: 100%;
+    cursor: default;
+    position: relative;
+    min-width: 2px;
+  }
+  .segment.other { background: var(--hairline-soft); }
+  .strip-caption { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+
+  /* ---------- tooltip ---------- */
+  #tooltip {
+    position: fixed;
+    z-index: 50;
+    display: none;
+    pointer-events: none;
+    background: var(--ink);
+    color: var(--paper);
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+    max-width: 220px;
+  }
+  #tooltip .tt-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #tooltip .tt-row + .tt-row { margin-top: 3px; }
+  #tooltip .tt-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  #tooltip .tt-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+  #tooltip .tt-label { opacity: 0.8; }
+  #tooltip .tt-title { font-weight: 700; margin-bottom: 4px; }
+
+  footer {
+    font-size: 12.5px;
+    color: var(--muted);
+    border-top: 1px solid var(--hairline);
+    padding-top: 16px;
+    margin-top: 8px;
+    line-height: 1.6;
+  }
+  footer code {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+    background: var(--hairline-soft);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 11.5px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    section.panel, .masthead, .controlsbar { animation: rise 0.4s ease both; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+
+  @media (max-width: 520px) {
+    .barrow { grid-template-columns: 74px 1fr 76px; gap: 7px; }
+    .kpi .value { font-size: 1.25rem; }
+    body { font-size: 14px; }
+    .controlsbar .hint { margin-left: 0; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <span class="eyebrow">Interactive &middot; synthetic data</span>
+    <h1>Ledger Margin Analysis</h1>
+    <div class="meta">
+      <span>Jan 2024 &ndash; Dec 2025</span>
+      <span>20,000 transactions</span>
+      <span>40 customers &middot; 30 routes</span>
+    </div>
+  </header>
+
+  <div class="controlsbar">
+    <label for="strategy-select">Allocation strategy</label>
+    <select id="strategy-select">
+      <option value="direct_cost_only">Direct cost only</option>
+      <option value="proportional_by_revenue" selected>Proportional by revenue</option>
+      <option value="per_unit_by_quantity">Per-unit by quantity</option>
+    </select>
+    <span class="hint">Scopes the KPIs, customer/route/month views below</span>
+  </div>
+
+  <div class="kpis" id="kpi-row"></div>
+  <div class="footnote" id="data-footnote"></div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Margin by customer</h2>
+      <span class="hint" id="customer-hint"></span>
+    </div>
+    <div class="barlist scroll" id="chart-customer"></div>
+    <div class="tablewrap scroll"><table id="table-customer"></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Margin by route</h2>
+      <span class="hint" id="route-hint"></span>
+    </div>
+    <div class="barlist scroll" id="chart-route"></div>
+    <div class="tablewrap scroll"><table id="table-route"></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Margin over time</h2>
+      <span class="hint">Monthly, revenue and margin</span>
+    </div>
+    <div class="legend">
+      <span class="item"><span class="key" style="background:var(--series-revenue)"></span>Revenue</span>
+      <span class="item"><span class="key area" style="background:var(--series-margin)"></span>Margin</span>
+    </div>
+    <div class="chartbox" id="chart-month"></div>
+    <div class="tablewrap scroll"><table id="table-month"></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Revenue concentration</h2>
+      <span class="hint">Cumulative share of total revenue (all strategies use the same revenue)</span>
+    </div>
+    <div class="subcontrols">
+      <span class="field">
+        <label for="conc-dim">Group by</label>
+        <select id="conc-dim">
+          <option value="customer_id" selected>Customer</option>
+          <option value="origin_id">Origin</option>
+          <option value="destination_id">Destination</option>
+        </select>
+      </span>
+      <span class="field">
+        <label for="conc-topn">Top N</label>
+        <input type="range" id="conc-topn" min="3" max="25" value="10" />
+        <span class="rangeval mono" id="conc-topn-val">10</span>
+      </span>
+    </div>
+    <div class="strip" id="chart-concentration"></div>
+    <div class="strip-caption" id="concentration-caption"></div>
+    <div class="tablewrap scroll"><table id="table-concentration"></table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Allocation strategy comparison</h2>
+      <span class="hint">Same revenue, different cost allocation</span>
+    </div>
+    <div class="legend">
+      <span class="item"><span class="key" style="background:var(--series-cost)"></span>Allocated cost</span>
+      <span class="item"><span class="key" style="background:var(--series-margin)"></span>Margin</span>
+    </div>
+    <div id="chart-strategy"></div>
+    <div class="tablewrap"><table id="table-strategy"></table></div>
+  </section>
+
+  <footer>
+    Runs entirely in your browser against a precomputed snapshot of <code>data/synthetic/ledger.csv</code> &mdash;
+    switching strategy or Top&nbsp;N re-renders instantly, no server involved. This mirrors <code>dashboard/app.py</code>'s
+    five views; it does not read live data, so it won't reflect changes to the underlying ledger. Generated 2026-07-26.
+  </footer>
+
+</div>
+
+<div id="tooltip"><div class="tt-title"></div><div class="tt-body"></div></div>
+
+<script>
+const DATA = {"strategies":{"direct_cost_only":{"kpis":{"total_revenue":5489323.67,"total_allocated_cost":3137127.1900000004,"total_margin":2092360.6,"overall_margin_pct":0.3811691067581009,"null_allocated_rows":966,"txn_count":20000},"by_customer":[{"customer_id":"CUST0016","revenue":150164.62,"margin":59722.85,"margin_pct":0.39771585344137655,"txn_count":524},{"customer_id":"CUST0005","revenue":152698.32,"margin":58944.71,"margin_pct":0.38602068444498927,"txn_count":529},{"customer_id":"CUST0037","revenue":150394.33,"margin":57154.33,"margin_pct":0.3800298189433073,"txn_count":525},{"customer_id":"CUST0034","revenue":150758.0,"margin":56847.29,"margin_pct":0.37707644038790644,"txn_count":534},{"customer_id":"CUST0023","revenue":142841.26,"margin":56708.9,"margin_pct":0.39700643917590756,"txn_count":503},{"customer_id":"CUST0019","revenue":144692.21,"margin":56272.79,"margin_pct":0.3889137500906234,"txn_count":531},{"customer_id":"CUST0027","revenue":145940.42,"margin":56064.090000000004,"margin_pct":0.3841573842256998,"txn_count":541},{"customer_id":"CUST0039","revenue":147298.58,"margin":55819.21,"margin_pct":0.3789528045687881,"txn_count":543},{"customer_id":"CUST0003","revenue":143302.69,"margin":55205.68,"margin_pct":0.3852382673346885,"txn_count":504},{"customer_id":"CUST0012","revenue":141929.38,"margin":54969.02,"margin_pct":0.3872983874092876,"txn_count":520},{"customer_id":"CUST0025","revenue":138021.07,"margin":54715.01,"margin_pct":0.3964250530734184,"txn_count":480},{"customer_id":"CUST0018","revenue":141461.17,"margin":54502.67,"margin_pct":0.3852836082155972,"txn_count":520},{"customer_id":"CUST0010","revenue":139332.54,"margin":53635.18,"margin_pct":0.3849436750381497,"txn_count":470},{"customer_id":"CUST0004","revenue":142289.15,"margin":53387.69,"margin_pct":0.37520562881990654,"txn_count":513},{"customer_id":"CUST0029","revenue":138387.21,"margin":52891.44,"margin_pct":0.3821989040750226,"txn_count":509},{"customer_id":"CUST0033","revenue":136987.61,"margin":52884.28,"margin_pct":0.3860515560494851,"txn_count":510},{"customer_id":"CUST0026","revenue":137031.49,"margin":52729.9,"margin_pct":0.38480133289071006,"txn_count":492},{"customer_id":"CUST0011","revenue":138003.7,"margin":52214.46,"margin_pct":0.37835550785957184,"txn_count":475},{"customer_id":"CUST0036","revenue":136362.89,"margin":52106.55,"margin_pct":0.3821167914525719,"txn_count":498},{"customer_id":"CUST0001","revenue":135801.82,"margin":51882.32,"margin_pct":0.3820443643538798,"txn_count":490},{"customer_id":"CUST0035","revenue":136761.67,"margin":51301.86,"margin_pct":0.3751187010220042,"txn_count":513},{"customer_id":"CUST0013","revenue":128538.95,"margin":51168.13,"margin_pct":0.39807490258789263,"txn_count":467},{"customer_id":"CUST0015","revenue":131890.52,"margin":51010.55,"margin_pct":0.3867643406061331,"txn_count":469},{"customer_id":"CUST0022","revenue":135720.87,"margin":50859.34,"margin_pct":0.3747348510218067,"txn_count":481},{"customer_id":"CUST0040","revenue":134633.57,"margin":50698.45,"margin_pct":0.376566186278801,"txn_count":489},{"customer_id":"CUST0008","revenue":135543.69,"margin":50687.01,"margin_pct":0.37395329874817484,"txn_count":511},{"customer_id":"CUST0006","revenue":133428.09,"margin":50584.14,"margin_pct":0.3791116248460126,"txn_count":473},{"customer_id":"CUST0038","revenue":133203.75,"margin":50499.77,"margin_pct":0.3791167290710659,"txn_count":490},{"customer_id":"CUST0028","revenue":133653.69,"margin":50277.37,"margin_pct":0.3761764452593864,"txn_count":511},{"customer_id":"CUST0024","revenue":135795.42,"margin":50094.17,"margin_pct":0.3688944001204164,"txn_count":507},{"customer_id":"CUST0021","revenue":132766.96,"margin":49899.22,"margin_pct":0.37584064589563554,"txn_count":505},{"customer_id":"CUST0017","revenue":129788.96,"margin":49851.13,"margin_pct":0.3840937626744216,"txn_count":494},{"customer_id":"CUST0020","revenue":131235.32,"margin":49737.75,"margin_pct":0.3789966755900774,"txn_count":503},{"customer_id":"CUST0031","revenue":133440.23,"margin":49725.47,"margin_pct":0.3726422683773851,"txn_count":497},{"customer_id":"CUST0009","revenue":132538.14,"margin":49678.76,"margin_pct":0.37482614438379774,"txn_count":511},{"customer_id":"CUST0014","revenue":128083.39,"margin":49576.69,"margin_pct":0.38706572335413675,"txn_count":469},{"customer_id":"CUST0030","revenue":130604.66,"margin":48334.01,"margin_pct":0.37007875522971384,"txn_count":480},{"customer_id":"CUST0032","revenue":129640.33,"margin":48033.54,"margin_pct":0.37051386709675915,"txn_count":487},{"customer_id":"CUST0007","revenue":128474.13,"margin":46682.98,"margin_pct":0.36336482683323096,"txn_count":468},{"customer_id":"CUST0002","revenue":119882.87,"margin":45001.89,"margin_pct":0.37538215426440824,"txn_count":464}],"by_route":[{"origin_id":"LOC012","destination_id":"LOC002","revenue":210152.61,"margin":80927.45,"margin_pct":0.3850889598753972,"txn_count":718},{"origin_id":"LOC010","destination_id":"LOC005","revenue":204770.17,"margin":80790.04,"margin_pct":0.39454008364597243,"txn_count":711},{"origin_id":"LOC005","destination_id":"LOC003","revenue":202270.41,"margin":76762.98,"margin_pct":0.37950672073092645,"txn_count":740},{"origin_id":"LOC011","destination_id":"LOC002","revenue":192502.49,"margin":75631.77,"margin_pct":0.3928872296664838,"txn_count":686},{"origin_id":"LOC008","destination_id":"LOC009","revenue":204534.21,"margin":75530.88,"margin_pct":0.36928238068340746,"txn_count":713},{"origin_id":"LOC007","destination_id":"LOC004","revenue":201740.61,"margin":74971.7,"margin_pct":0.37162423569553005,"txn_count":704},{"origin_id":"LOC004","destination_id":"LOC009","revenue":193387.35,"margin":73402.47,"margin_pct":0.379561899989839,"txn_count":668},{"origin_id":"LOC004","destination_id":"LOC003","revenue":193056.81,"margin":71733.2,"margin_pct":0.37156524030413635,"txn_count":741},{"origin_id":"LOC010","destination_id":"LOC006","revenue":187708.93,"margin":71551.6,"margin_pct":0.3811837827854008,"txn_count":660},{"origin_id":"LOC012","destination_id":"LOC011","revenue":184557.67,"margin":71466.43,"margin_pct":0.387230885608818,"txn_count":669},{"origin_id":"LOC005","destination_id":"LOC011","revenue":180784.98,"margin":70585.97,"margin_pct":0.39044156212534914,"txn_count":638},{"origin_id":"LOC002","destination_id":"LOC004","revenue":188279.48,"margin":70538.55,"margin_pct":0.37464810291594175,"txn_count":665},{"origin_id":"LOC009","destination_id":"LOC002","revenue":180535.59,"margin":69072.31,"margin_pct":0.38259663925545095,"txn_count":655},{"origin_id":"LOC012","destination_id":"LOC009","revenue":184734.05,"margin":68878.22,"margin_pct":0.37285070077768556,"txn_count":671},{"origin_id":"LOC010","destination_id":"LOC004","revenue":177393.13,"margin":68230.36,"margin_pct":0.38462797290966116,"txn_count":644},{"origin_id":"LOC009","destination_id":"LOC004","revenue":179045.64,"margin":68227.35,"margin_pct":0.3810612199213564,"txn_count":680},{"origin_id":"LOC007","destination_id":"LOC002","revenue":176928.79,"margin":68091.46,"margin_pct":0.38485234652879274,"txn_count":662},{"origin_id":"LOC010","destination_id":"LOC007","revenue":181469.29,"margin":67942.09,"margin_pct":0.3743999329032477,"txn_count":667},{"origin_id":"LOC008","destination_id":"LOC010","revenue":176701.26,"margin":67716.46,"margin_pct":0.3832256770551608,"txn_count":678},{"origin_id":"LOC011","destination_id":"LOC012","revenue":173349.76,"margin":67560.21,"margin_pct":0.3897335075629756,"txn_count":657},{"origin_id":"LOC004","destination_id":"LOC006","revenue":173107.45,"margin":67433.61,"margin_pct":0.38954770577465037,"txn_count":657},{"origin_id":"LOC001","destination_id":"LOC011","revenue":176466.09,"margin":67179.88,"margin_pct":0.3806956905998201,"txn_count":675},{"origin_id":"LOC003","destination_id":"LOC012","revenue":175253.95,"margin":66958.66,"margin_pct":0.3820664812405084,"txn_count":642},{"origin_id":"LOC002","destination_id":"LOC007","revenue":172634.8,"margin":66628.89,"margin_pct":0.38595283222154514,"txn_count":651},{"origin_id":"LOC005","destination_id":"LOC004","revenue":180385.3,"margin":65843.87,"margin_pct":0.36501793660569903,"txn_count":652},{"origin_id":"LOC001","destination_id":"LOC012","revenue":169717.88,"margin":64767.23,"margin_pct":0.3816170105353661,"txn_count":624},{"origin_id":"LOC002","destination_id":"LOC009","revenue":173626.88,"margin":64524.74,"margin_pct":0.37162874780679117,"txn_count":654},{"origin_id":"LOC010","destination_id":"LOC001","revenue":165564.9,"margin":64506.72,"margin_pct":0.38961591496748404,"txn_count":609},{"origin_id":"LOC007","destination_id":"LOC006","revenue":165268.71,"margin":63371.0,"margin_pct":0.3834422135926395,"txn_count":585},{"origin_id":"LOC005","destination_id":"LOC001","revenue":163394.48,"margin":61534.5,"margin_pct":0.37660084967374663,"txn_count":624}],"by_month":[{"period_label":"2024-01","revenue":277812.47,"margin":106769.33,"margin_pct":0.3843215893080682,"txn_count":987},{"period_label":"2024-02","revenue":300697.59,"margin":115282.61,"margin_pct":0.3833838841209203,"txn_count":1025},{"period_label":"2024-03","revenue":312873.76,"margin":117706.21,"margin_pct":0.37620991290544786,"txn_count":1031},{"period_label":"2024-04","revenue":306487.46,"margin":117203.79,"margin_pct":0.38240974035283526,"txn_count":1019},{"period_label":"2024-05","revenue":293131.83,"margin":111760.38,"margin_pct":0.38126320161137056,"txn_count":992},{"period_label":"2024-06","revenue":284990.19,"margin":108357.15,"margin_pct":0.3802136136685968,"txn_count":1021},{"period_label":"2024-07","revenue":246323.98,"margin":95583.74,"margin_pct":0.3880407421153231,"txn_count":983},{"period_label":"2024-08","revenue":244860.75,"margin":93201.45,"margin_pct":0.380630419534368,"txn_count":977},{"period_label":"2024-09","revenue":243417.56,"margin":91701.38,"margin_pct":0.37672458798781816,"txn_count":1032},{"period_label":"2024-10","revenue":237368.92,"margin":88753.37,"margin_pct":0.3739047639429795,"txn_count":1015},{"period_label":"2024-11","revenue":244845.49,"margin":90598.13,"margin_pct":0.3700216409948985,"txn_count":965},{"period_label":"2024-12","revenue":260377.78,"margin":100275.72,"margin_pct":0.3851162722103246,"txn_count":955},{"period_label":"2025-01","revenue":275075.61,"margin":106403.78,"margin_pct":0.38681648292991155,"txn_count":968},{"period_label":"2025-02","revenue":289711.48,"margin":111094.29,"margin_pct":0.38346526689242694,"txn_count":969},{"period_label":"2025-03","revenue":299309.01,"margin":113304.62,"margin_pct":0.37855399007199947,"txn_count":994},{"period_label":"2025-04","revenue":298022.1,"margin":116272.94,"margin_pct":0.3901487171588953,"txn_count":977},{"period_label":"2025-05","revenue":271180.29,"margin":105034.37,"margin_pct":0.3873230241032636,"txn_count":937},{"period_label":"2025-06","revenue":256198.87,"margin":95078.43,"margin_pct":0.37111182418564137,"txn_count":952},{"period_label":"2025-07","revenue":232046.28,"margin":89414.56999999999,"margin_pct":0.3853307624668665,"txn_count":938},{"period_label":"2025-08","revenue":232661.08,"margin":88559.88,"margin_pct":0.3806389964320634,"txn_count":967},{"period_label":"2025-09","revenue":22459.52,"margin":8128.299999999999,"margin_pct":0.36190889208674093,"txn_count":83},{"period_label":"2025-10","revenue":16836.4,"margin":6888.91,"margin_pct":0.40916763678696155,"txn_count":60},{"period_label":"2025-11","revenue":21301.52,"margin":7395.04,"margin_pct":0.3471602026522051,"txn_count":80},{"period_label":"2025-12","revenue":21333.73,"margin":7592.21,"margin_pct":0.3558782266392234,"txn_count":73}]},"proportional_by_revenue":{"kpis":{"total_revenue":5489323.67,"total_allocated_cost":4425614.93,"total_margin":981777.5700000001,"overall_margin_pct":0.17885219182202097,"null_allocated_rows":296,"txn_count":20000},"by_customer":[{"customer_id":"CUST0023","revenue":142841.26,"margin":28092.498403912323,"margin_pct":0.19666935452622247,"txn_count":503},{"customer_id":"CUST0037","revenue":150394.33,"margin":27949.877305627757,"margin_pct":0.18584395638870002,"txn_count":525},{"customer_id":"CUST0034","revenue":150758.0,"margin":27358.00013404653,"margin_pct":0.18146964097458532,"txn_count":534},{"customer_id":"CUST0005","revenue":152698.32,"margin":27342.015374791055,"margin_pct":0.17905904514726195,"txn_count":529},{"customer_id":"CUST0016","revenue":150164.62,"margin":27337.27147814586,"margin_pct":0.18204868415839803,"txn_count":524},{"customer_id":"CUST0003","revenue":143302.69,"margin":26517.569062146253,"margin_pct":0.1850458568652567,"txn_count":504},{"customer_id":"CUST0018","revenue":141461.17,"margin":25871.512081167722,"margin_pct":0.18288772870440503,"txn_count":520},{"customer_id":"CUST0022","revenue":135720.87,"margin":25362.69902964527,"margin_pct":0.18687397914296652,"txn_count":481},{"customer_id":"CUST0008","revenue":135543.69,"margin":25277.07781713854,"margin_pct":0.18648656988118398,"txn_count":511},{"customer_id":"CUST0036","revenue":136362.89,"margin":25139.153299082063,"margin_pct":0.18435479989520653,"txn_count":498},{"customer_id":"CUST0014","revenue":128083.39,"margin":25090.004954156724,"margin_pct":0.1958880457033244,"txn_count":469},{"customer_id":"CUST0024","revenue":135795.42,"margin":24986.359021162378,"margin_pct":0.18400001282195214,"txn_count":507},{"customer_id":"CUST0038","revenue":133203.75,"margin":24974.607284275153,"margin_pct":0.18749177319914156,"txn_count":490},{"customer_id":"CUST0011","revenue":138003.7,"margin":24918.82012948673,"margin_pct":0.18056631908772539,"txn_count":475},{"customer_id":"CUST0012","revenue":141929.38,"margin":24908.041160836074,"margin_pct":0.17549601894150507,"txn_count":520},{"customer_id":"CUST0030","revenue":130604.66,"margin":24891.76922903901,"margin_pct":0.1905886760015991,"txn_count":480},{"customer_id":"CUST0039","revenue":147298.58,"margin":24885.86730557718,"margin_pct":0.16894845358032087,"txn_count":543},{"customer_id":"CUST0026","revenue":137031.49,"margin":24878.451116003493,"margin_pct":0.18155280305281285,"txn_count":492},{"customer_id":"CUST0033","revenue":136987.61,"margin":24790.909282335262,"margin_pct":0.18097190893640136,"txn_count":510},{"customer_id":"CUST0025","revenue":138021.07,"margin":24708.520541267735,"margin_pct":0.1790199173305042,"txn_count":480},{"customer_id":"CUST0019","revenue":144692.21,"margin":24665.231054109958,"margin_pct":0.17046689005655494,"txn_count":531},{"customer_id":"CUST0017","revenue":129788.96,"margin":24497.949514901633,"margin_pct":0.1887521828890657,"txn_count":494},{"customer_id":"CUST0031","revenue":133440.23,"margin":24375.57989646171,"margin_pct":0.18267039779878758,"txn_count":497},{"customer_id":"CUST0029","revenue":138387.21,"margin":24317.452838583493,"margin_pct":0.17572037790619158,"txn_count":509},{"customer_id":"CUST0009","revenue":132538.14,"margin":24261.659193586496,"margin_pct":0.18305416986828466,"txn_count":511},{"customer_id":"CUST0010","revenue":139332.54,"margin":24065.17995977208,"margin_pct":0.1727175859980165,"txn_count":470},{"customer_id":"CUST0035","revenue":136761.67,"margin":24018.595253776817,"margin_pct":0.17562373473340018,"txn_count":513},{"customer_id":"CUST0027","revenue":145940.42,"margin":23547.569247577107,"margin_pct":0.16135056516609383,"txn_count":541},{"customer_id":"CUST0040","revenue":134633.57,"margin":23472.397941286225,"margin_pct":0.17434283248439617,"txn_count":489},{"customer_id":"CUST0006","revenue":133428.09,"margin":23455.85328667986,"margin_pct":0.17579396727240762,"txn_count":473},{"customer_id":"CUST0007","revenue":128474.13,"margin":23377.36434661249,"margin_pct":0.181961647427482,"txn_count":468},{"customer_id":"CUST0001","revenue":135801.82,"margin":23264.19633932763,"margin_pct":0.17130990099637566,"txn_count":490},{"customer_id":"CUST0015","revenue":131890.52,"margin":23120.655440902738,"margin_pct":0.17530187492552718,"txn_count":469},{"customer_id":"CUST0013","revenue":128538.95,"margin":23008.214045362012,"margin_pct":0.1789979927902166,"txn_count":467},{"customer_id":"CUST0004","revenue":142289.15,"margin":22894.132879059354,"margin_pct":0.16089865516140447,"txn_count":513},{"customer_id":"CUST0028","revenue":133653.69,"margin":22848.95292567098,"margin_pct":0.1709563942878867,"txn_count":511},{"customer_id":"CUST0020","revenue":131235.32,"margin":22846.66681226856,"margin_pct":0.17408931385444526,"txn_count":503},{"customer_id":"CUST0032","revenue":129640.33,"margin":21772.76797296525,"margin_pct":0.16794748958881273,"txn_count":487},{"customer_id":"CUST0021","revenue":132766.96,"margin":21639.722160516012,"margin_pct":0.16299026625687607,"txn_count":505},{"customer_id":"CUST0002","revenue":119882.87,"margin":21046.404880736492,"margin_pct":0.1755580666423526,"txn_count":464}],"by_route":[{"origin_id":"LOC012","destination_id":"LOC002","revenue":210152.61,"margin":39778.13879600203,"margin_pct":0.18928215450667984,"txn_count":718},{"origin_id":"LOC010","destination_id":"LOC005","revenue":204770.17,"margin":37997.036495804176,"margin_pct":0.185559432293308,"txn_count":711},{"origin_id":"LOC008","destination_id":"LOC009","revenue":204534.21,"margin":36564.80475065027,"margin_pct":0.17877109531285876,"txn_count":713},{"origin_id":"LOC004","destination_id":"LOC009","revenue":193387.35,"margin":35516.65890146174,"margin_pct":0.1836555436612671,"txn_count":668},{"origin_id":"LOC004","destination_id":"LOC003","revenue":193056.81,"margin":35341.72110351266,"margin_pct":0.183063840656606,"txn_count":741},{"origin_id":"LOC007","destination_id":"LOC004","revenue":201740.61,"margin":34898.30823378221,"margin_pct":0.1729860350565125,"txn_count":704},{"origin_id":"LOC005","destination_id":"LOC011","revenue":180784.98,"margin":34361.03796828869,"margin_pct":0.19006577851925913,"txn_count":638},{"origin_id":"LOC010","destination_id":"LOC007","revenue":181469.29,"margin":33782.79133117508,"margin_pct":0.18616258062824337,"txn_count":667},{"origin_id":"LOC005","destination_id":"LOC004","revenue":180385.3,"margin":33589.96182345514,"margin_pct":0.1862123012432562,"txn_count":652},{"origin_id":"LOC005","destination_id":"LOC003","revenue":202270.41,"margin":33372.90192631081,"margin_pct":0.1649915176733503,"txn_count":740},{"origin_id":"LOC011","destination_id":"LOC012","revenue":173349.76,"margin":33351.925598364454,"margin_pct":0.19239672208582495,"txn_count":657},{"origin_id":"LOC005","destination_id":"LOC001","revenue":163394.48,"margin":33126.78661395671,"margin_pct":0.2027411612311304,"txn_count":624},{"origin_id":"LOC007","destination_id":"LOC002","revenue":176928.79,"margin":32992.26468892471,"margin_pct":0.1864719963829782,"txn_count":662},{"origin_id":"LOC011","destination_id":"LOC002","revenue":192502.49,"margin":32479.662221252554,"margin_pct":0.16872333558517896,"txn_count":686},{"origin_id":"LOC002","destination_id":"LOC004","revenue":188279.48,"margin":32392.8498925018,"margin_pct":0.1720466292582803,"txn_count":665},{"origin_id":"LOC010","destination_id":"LOC004","revenue":177393.13,"margin":32350.30982837851,"margin_pct":0.18236506581950784,"txn_count":644},{"origin_id":"LOC009","destination_id":"LOC004","revenue":179045.64,"margin":32172.536731993525,"margin_pct":0.17968902639569176,"txn_count":680},{"origin_id":"LOC012","destination_id":"LOC011","revenue":184557.67,"margin":32090.88954298909,"margin_pct":0.17388001020488114,"txn_count":669},{"origin_id":"LOC010","destination_id":"LOC006","revenue":187708.93,"margin":31992.67601100302,"margin_pct":0.17043768781273763,"txn_count":660},{"origin_id":"LOC008","destination_id":"LOC010","revenue":176701.26,"margin":31383.284719941894,"margin_pct":0.17760645690892013,"txn_count":678},{"origin_id":"LOC001","destination_id":"LOC012","revenue":169717.88,"margin":31323.623499147736,"margin_pct":0.18456289637336817,"txn_count":624},{"origin_id":"LOC004","destination_id":"LOC006","revenue":173107.45,"margin":31200.359500393504,"margin_pct":0.18023695398663375,"txn_count":657},{"origin_id":"LOC001","destination_id":"LOC011","revenue":176466.09,"margin":31061.3044297246,"margin_pct":0.1760185451478219,"txn_count":675},{"origin_id":"LOC009","destination_id":"LOC002","revenue":180535.59,"margin":30766.475209424345,"margin_pct":0.1704177841578181,"txn_count":655},{"origin_id":"LOC012","destination_id":"LOC009","revenue":184734.05,"margin":30262.984805140968,"margin_pct":0.1638192028223328,"txn_count":671},{"origin_id":"LOC003","destination_id":"LOC012","revenue":175253.95,"margin":29931.978330181857,"margin_pct":0.17079203253439854,"txn_count":642},{"origin_id":"LOC010","destination_id":"LOC001","revenue":165564.9,"margin":29615.23699777204,"margin_pct":0.17887388569541032,"txn_count":609},{"origin_id":"LOC002","destination_id":"LOC009","revenue":173626.88,"margin":29556.944379864002,"margin_pct":0.17023253761090448,"txn_count":654},{"origin_id":"LOC007","destination_id":"LOC006","revenue":165268.71,"margin":29482.708156138113,"margin_pct":0.17839255934252837,"txn_count":585},{"origin_id":"LOC002","destination_id":"LOC007","revenue":172634.8,"margin":29039.40751246375,"margin_pct":0.16821294149536334,"txn_count":651}],"by_month":[{"period_label":"2024-01","revenue":277812.47,"margin":58137.08999999999,"margin_pct":0.20926738817735574,"txn_count":987},{"period_label":"2024-02","revenue":300697.59,"margin":60965.71,"margin_pct":0.20274758437538523,"txn_count":1025},{"period_label":"2024-03","revenue":312873.76,"margin":68181.48999999999,"margin_pct":0.21792012855280668,"txn_count":1031},{"period_label":"2024-04","revenue":306487.46,"margin":61783.76,"margin_pct":0.20158658367295026,"txn_count":1019},{"period_label":"2024-05","revenue":293131.83,"margin":51914.890000000014,"margin_pct":0.1771042400956594,"txn_count":992},{"period_label":"2024-06","revenue":284990.19,"margin":52718.399999999994,"margin_pct":0.1849832094220506,"txn_count":1021},{"period_label":"2024-07","revenue":246323.98,"margin":39392.57,"margin_pct":0.1599217826863629,"txn_count":983},{"period_label":"2024-08","revenue":244860.75,"margin":38753.59,"margin_pct":0.15826787265823533,"txn_count":977},{"period_label":"2024-09","revenue":243417.56,"margin":34094.43,"margin_pct":0.14006561400089623,"txn_count":1032},{"period_label":"2024-10","revenue":237368.92,"margin":36334.110000000015,"margin_pct":0.15307020818058242,"txn_count":1015},{"period_label":"2024-11","revenue":244845.49,"margin":32411.280000000002,"margin_pct":0.1323744211094107,"txn_count":965},{"period_label":"2024-12","revenue":260377.78,"margin":44389.3,"margin_pct":0.17048036894699695,"txn_count":955},{"period_label":"2025-01","revenue":275075.61,"margin":51903.42,"margin_pct":0.1886878302296594,"txn_count":968},{"period_label":"2025-02","revenue":289711.48,"margin":59279.05,"margin_pct":0.2046140870910604,"txn_count":969},{"period_label":"2025-03","revenue":299309.01,"margin":64341.81,"margin_pct":0.2149678354153121,"txn_count":994},{"period_label":"2025-04","revenue":298022.1,"margin":62586.46,"margin_pct":0.21000610357419802,"txn_count":977},{"period_label":"2025-05","revenue":271180.29,"margin":53435.119999999995,"margin_pct":0.19704647413718748,"txn_count":937},{"period_label":"2025-06","revenue":256198.87,"margin":45419.39,"margin_pct":0.17728177333490971,"txn_count":952},{"period_label":"2025-07","revenue":232046.28,"margin":37545.0,"margin_pct":0.1617996203171195,"txn_count":938},{"period_label":"2025-08","revenue":232661.08,"margin":28190.699999999993,"margin_pct":0.12116637643047129,"txn_count":967},{"period_label":"2025-09","revenue":22459.52,"margin":0.0,"margin_pct":0.0,"txn_count":83},{"period_label":"2025-10","revenue":16836.4,"margin":0.0,"margin_pct":0.0,"txn_count":60},{"period_label":"2025-11","revenue":21301.52,"margin":0.0,"margin_pct":0.0,"txn_count":80},{"period_label":"2025-12","revenue":21333.73,"margin":0.0,"margin_pct":0.0,"txn_count":73}]},"per_unit_by_quantity":{"kpis":{"total_revenue":5489323.67,"total_allocated_cost":4425614.93,"total_margin":981777.5700000001,"overall_margin_pct":0.17885219182202097,"null_allocated_rows":296,"txn_count":20000},"by_customer":[{"customer_id":"CUST0037","revenue":150394.33,"margin":29192.755912698456,"margin_pct":0.19410808846781963,"txn_count":525},{"customer_id":"CUST0023","revenue":142841.26,"margin":29035.076352614014,"margin_pct":0.20326813381941614,"txn_count":503},{"customer_id":"CUST0034","revenue":150758.0,"margin":28214.543568927962,"margin_pct":0.1871512196296579,"txn_count":534},{"customer_id":"CUST0016","revenue":150164.62,"margin":27995.841784780005,"margin_pct":0.1864343397584598,"txn_count":524},{"customer_id":"CUST0003","revenue":143302.69,"margin":27703.91962893549,"margin_pct":0.1933244911797224,"txn_count":504},{"customer_id":"CUST0005","revenue":152698.32,"margin":27594.40135534535,"margin_pct":0.18071188573224217,"txn_count":529},{"customer_id":"CUST0022","revenue":135720.87,"margin":26682.309130727182,"margin_pct":0.19659695027542326,"txn_count":481},{"customer_id":"CUST0011","revenue":138003.7,"margin":26551.434243823423,"margin_pct":0.19239653896108164,"txn_count":475},{"customer_id":"CUST0012","revenue":141929.38,"margin":25894.161286286213,"margin_pct":0.18244398225572614,"txn_count":520},{"customer_id":"CUST0018","revenue":141461.17,"margin":25653.447268206706,"margin_pct":0.18134621160143596,"txn_count":520},{"customer_id":"CUST0025","revenue":138021.07,"margin":25509.521995672192,"margin_pct":0.18482338961487685,"txn_count":480},{"customer_id":"CUST0036","revenue":136362.89,"margin":25292.10772214568,"margin_pct":0.18547647180362398,"txn_count":498},{"customer_id":"CUST0026","revenue":137031.49,"margin":25187.446071932376,"margin_pct":0.18380772238506915,"txn_count":492},{"customer_id":"CUST0019","revenue":144692.21,"margin":25111.27154184136,"margin_pct":0.17354957493455495,"txn_count":531},{"customer_id":"CUST0010","revenue":139332.54,"margin":25101.605846863848,"margin_pct":0.18015609165571694,"txn_count":470},{"customer_id":"CUST0030","revenue":130604.66,"margin":25053.26716735372,"margin_pct":0.19182521640004055,"txn_count":480},{"customer_id":"CUST0014","revenue":128083.39,"margin":24894.83873503263,"margin_pct":0.19436430231142876,"txn_count":469},{"customer_id":"CUST0033","revenue":136987.61,"margin":24702.45093230352,"margin_pct":0.18032616914992183,"txn_count":510},{"customer_id":"CUST0024","revenue":135795.42,"margin":24547.687814056284,"margin_pct":0.18076962988925754,"txn_count":507},{"customer_id":"CUST0001","revenue":135801.82,"margin":24421.077356376638,"margin_pct":0.1798287928422214,"txn_count":490},{"customer_id":"CUST0038","revenue":133203.75,"margin":24409.086672429323,"margin_pct":0.18324624248513516,"txn_count":490},{"customer_id":"CUST0008","revenue":135543.69,"margin":24396.26567672147,"margin_pct":0.1799882065828477,"txn_count":511},{"customer_id":"CUST0039","revenue":147298.58,"margin":24205.759338939646,"margin_pct":0.1643312470421619,"txn_count":543},{"customer_id":"CUST0031","revenue":133440.23,"margin":23869.35102915934,"margin_pct":0.17887672277812575,"txn_count":497},{"customer_id":"CUST0029","revenue":138387.21,"margin":23694.03274648881,"margin_pct":0.17121548115963037,"txn_count":509},{"customer_id":"CUST0013","revenue":128538.95,"margin":23687.960936628642,"margin_pct":0.1842862489278825,"txn_count":467},{"customer_id":"CUST0027","revenue":145940.42,"margin":23657.780893940697,"margin_pct":0.1621057476327716,"txn_count":541},{"customer_id":"CUST0006","revenue":133428.09,"margin":23549.263222396585,"margin_pct":0.17649404426306772,"txn_count":473},{"customer_id":"CUST0017","revenue":129788.96,"margin":23410.126419390057,"margin_pct":0.1803707065638715,"txn_count":494},{"customer_id":"CUST0015","revenue":131890.52,"margin":23371.787425738818,"margin_pct":0.17720596920642073,"txn_count":469},{"customer_id":"CUST0007","revenue":128474.13,"margin":23034.67252441251,"margin_pct":0.1792942479891672,"txn_count":468},{"customer_id":"CUST0035","revenue":136761.67,"margin":23019.537824646013,"margin_pct":0.16831863653497367,"txn_count":513},{"customer_id":"CUST0004","revenue":142289.15,"margin":22770.93811868352,"margin_pct":0.16003284943850968,"txn_count":513},{"customer_id":"CUST0040","revenue":134633.57,"margin":22708.205039060635,"margin_pct":0.16866673771675691,"txn_count":489},{"customer_id":"CUST0009","revenue":132538.14,"margin":22266.2857366423,"margin_pct":0.16799908114481082,"txn_count":511},{"customer_id":"CUST0020","revenue":131235.32,"margin":21766.67582705807,"margin_pct":0.1658598906685949,"txn_count":503},{"customer_id":"CUST0028","revenue":133653.69,"margin":21339.77264011033,"margin_pct":0.1596646724838673,"txn_count":511},{"customer_id":"CUST0032","revenue":129640.33,"margin":21227.46207503714,"margin_pct":0.16374119130240675,"txn_count":487},{"customer_id":"CUST0021","revenue":132766.96,"margin":21088.29428488786,"margin_pct":0.15883691458242216,"txn_count":505},{"customer_id":"CUST0002","revenue":119882.87,"margin":19965.145851705274,"margin_pct":0.16653877114975038,"txn_count":464}],"by_route":[{"origin_id":"LOC012","destination_id":"LOC002","revenue":210152.61,"margin":42427.49534378967,"margin_pct":0.20188897650992615,"txn_count":718},{"origin_id":"LOC010","destination_id":"LOC005","revenue":204770.17,"margin":39148.54383665646,"margin_pct":0.19118284580540448,"txn_count":711},{"origin_id":"LOC008","destination_id":"LOC009","revenue":204534.21,"margin":38723.78156367195,"margin_pct":0.18932667334071868,"txn_count":713},{"origin_id":"LOC004","destination_id":"LOC009","revenue":193387.35,"margin":36838.90853503396,"margin_pct":0.19049285558250814,"txn_count":668},{"origin_id":"LOC007","destination_id":"LOC004","revenue":201740.61,"margin":35117.1653102895,"margin_pct":0.1740708789880704,"txn_count":704},{"origin_id":"LOC005","destination_id":"LOC011","revenue":180784.98,"margin":34359.19876913001,"margin_pct":0.1900556051123827,"txn_count":638},{"origin_id":"LOC005","destination_id":"LOC004","revenue":180385.3,"margin":34353.163769793675,"margin_pct":0.1904432554636862,"txn_count":652},{"origin_id":"LOC005","destination_id":"LOC003","revenue":202270.41,"margin":34023.40089375371,"margin_pct":0.16820750446767624,"txn_count":740},{"origin_id":"LOC004","destination_id":"LOC003","revenue":193056.81,"margin":33934.05628246873,"margin_pct":0.17577238680401241,"txn_count":741},{"origin_id":"LOC002","destination_id":"LOC004","revenue":188279.48,"margin":33557.9205432233,"margin_pct":0.17823461453804365,"txn_count":665},{"origin_id":"LOC011","destination_id":"LOC002","revenue":192502.49,"margin":33398.43094355189,"margin_pct":0.1734960983806074,"txn_count":686},{"origin_id":"LOC010","destination_id":"LOC007","revenue":181469.29,"margin":33162.96753160514,"margin_pct":0.18274699554731902,"txn_count":667},{"origin_id":"LOC005","destination_id":"LOC001","revenue":163394.48,"margin":32813.463063943236,"margin_pct":0.20082357166498668,"txn_count":624},{"origin_id":"LOC012","destination_id":"LOC011","revenue":184557.67,"margin":32447.684377313013,"margin_pct":0.1758132532628582,"txn_count":669},{"origin_id":"LOC010","destination_id":"LOC004","revenue":177393.13,"margin":32105.336024543078,"margin_pct":0.18098410025542183,"txn_count":644},{"origin_id":"LOC011","destination_id":"LOC012","revenue":173349.76,"margin":31926.67777243691,"margin_pct":0.18417491764878652,"txn_count":657},{"origin_id":"LOC007","destination_id":"LOC002","revenue":176928.79,"margin":31692.12541763249,"margin_pct":0.17912362039910232,"txn_count":662},{"origin_id":"LOC001","destination_id":"LOC012","revenue":169717.88,"margin":31487.090695770894,"margin_pct":0.18552606652740944,"txn_count":624},{"origin_id":"LOC009","destination_id":"LOC004","revenue":179045.64,"margin":31260.40068923799,"margin_pct":0.1745945932514078,"txn_count":680},{"origin_id":"LOC010","destination_id":"LOC006","revenue":187708.93,"margin":31201.514212381026,"margin_pct":0.166222854780436,"txn_count":660},{"origin_id":"LOC003","destination_id":"LOC012","revenue":175253.95,"margin":30491.840593525,"margin_pct":0.17398660967998153,"txn_count":642},{"origin_id":"LOC002","destination_id":"LOC009","revenue":173626.88,"margin":30417.82959662204,"margin_pct":0.17519078610766972,"txn_count":654},{"origin_id":"LOC008","destination_id":"LOC010","revenue":176701.26,"margin":30399.26052298603,"margin_pct":0.1720375990696729,"txn_count":678},{"origin_id":"LOC007","destination_id":"LOC006","revenue":165268.71,"margin":30321.96541516006,"margin_pct":0.18347069699497298,"txn_count":585},{"origin_id":"LOC009","destination_id":"LOC002","revenue":180535.59,"margin":30258.657058928973,"margin_pct":0.16760494182298888,"txn_count":655},{"origin_id":"LOC012","destination_id":"LOC009","revenue":184734.05,"margin":29920.798966859868,"margin_pct":0.16196688681301508,"txn_count":671},{"origin_id":"LOC004","destination_id":"LOC006","revenue":173107.45,"margin":29647.966936882916,"margin_pct":0.1712691564509957,"txn_count":657},{"origin_id":"LOC001","destination_id":"LOC011","revenue":176466.09,"margin":29244.823554134015,"margin_pct":0.16572489113423444,"txn_count":675},{"origin_id":"LOC010","destination_id":"LOC001","revenue":165564.9,"margin":28699.290293413855,"margin_pct":0.17334163396597863,"txn_count":609},{"origin_id":"LOC002","destination_id":"LOC007","revenue":172634.8,"margin":28395.81148526069,"margin_pct":0.16448486333729173,"txn_count":651}],"by_month":[{"period_label":"2024-01","revenue":277812.47,"margin":58137.090000000004,"margin_pct":0.2092673881773558,"txn_count":987},{"period_label":"2024-02","revenue":300697.59,"margin":60965.70999999999,"margin_pct":0.2027475843753852,"txn_count":1025},{"period_label":"2024-03","revenue":312873.76,"margin":68181.49,"margin_pct":0.21792012855280674,"txn_count":1031},{"period_label":"2024-04","revenue":306487.46,"margin":61783.76,"margin_pct":0.20158658367295026,"txn_count":1019},{"period_label":"2024-05","revenue":293131.83,"margin":51914.890000000014,"margin_pct":0.1771042400956594,"txn_count":992},{"period_label":"2024-06","revenue":284990.19,"margin":52718.399999999994,"margin_pct":0.1849832094220506,"txn_count":1021},{"period_label":"2024-07","revenue":246323.98,"margin":39392.57000000001,"margin_pct":0.15992178268636292,"txn_count":983},{"period_label":"2024-08","revenue":244860.75,"margin":38753.590000000004,"margin_pct":0.15826787265823536,"txn_count":977},{"period_label":"2024-09","revenue":243417.56,"margin":34094.43000000001,"margin_pct":0.14006561400089626,"txn_count":1032},{"period_label":"2024-10","revenue":237368.92,"margin":36334.11000000001,"margin_pct":0.1530702081805824,"txn_count":1015},{"period_label":"2024-11","revenue":244845.49,"margin":32411.280000000006,"margin_pct":0.1323744211094107,"txn_count":965},{"period_label":"2024-12","revenue":260377.78,"margin":44389.30000000001,"margin_pct":0.17048036894699697,"txn_count":955},{"period_label":"2025-01","revenue":275075.61,"margin":51903.42000000001,"margin_pct":0.18868783022965946,"txn_count":968},{"period_label":"2025-02","revenue":289711.48,"margin":59279.05000000001,"margin_pct":0.20461408709106044,"txn_count":969},{"period_label":"2025-03","revenue":299309.01,"margin":64341.81,"margin_pct":0.2149678354153121,"txn_count":994},{"period_label":"2025-04","revenue":298022.1,"margin":62586.46000000001,"margin_pct":0.21000610357419805,"txn_count":977},{"period_label":"2025-05","revenue":271180.29,"margin":53435.12,"margin_pct":0.1970464741371875,"txn_count":937},{"period_label":"2025-06","revenue":256198.87,"margin":45419.39000000001,"margin_pct":0.17728177333490974,"txn_count":952},{"period_label":"2025-07","revenue":232046.28,"margin":37545.0,"margin_pct":0.1617996203171195,"txn_count":938},{"period_label":"2025-08","revenue":232661.08,"margin":28190.7,"margin_pct":0.12116637643047132,"txn_count":967},{"period_label":"2025-09","revenue":22459.52,"margin":0.0,"margin_pct":0.0,"txn_count":83},{"period_label":"2025-10","revenue":16836.4,"margin":0.0,"margin_pct":0.0,"txn_count":60},{"period_label":"2025-11","revenue":21301.52,"margin":0.0,"margin_pct":0.0,"txn_count":80},{"period_label":"2025-12","revenue":21333.73,"margin":0.0,"margin_pct":0.0,"txn_count":73}]}},"concentration":{"customer_id":[{"customer_id":"CUST0005","revenue":152698.32,"cumulative_revenue":152698.32,"cumulative_share_of_total":0.02781732854167807},{"customer_id":"CUST0034","revenue":150758.0,"cumulative_revenue":303456.32,"cumulative_share_of_total":0.05528118548710027},{"customer_id":"CUST0037","revenue":150394.33,"cumulative_revenue":453850.65,"cumulative_share_of_total":0.08267879201227718},{"customer_id":"CUST0016","revenue":150164.62,"cumulative_revenue":604015.27,"cumulative_share_of_total":0.11003455185217745},{"customer_id":"CUST0039","revenue":147298.58,"cumulative_revenue":751313.85,"cumulative_share_of_total":0.13686820001269848},{"customer_id":"CUST0027","revenue":145940.42,"cumulative_revenue":897254.27,"cumulative_share_of_total":0.1634544297148359},{"customer_id":"CUST0019","revenue":144692.21,"cumulative_revenue":1041946.48,"cumulative_share_of_total":0.18981327074852555},{"customer_id":"CUST0003","revenue":143302.69,"cumulative_revenue":1185249.17,"cumulative_share_of_total":0.21591898041603363},{"customer_id":"CUST0023","revenue":142841.26,"cumulative_revenue":1328090.43,"cumulative_share_of_total":0.24194063054766088},{"customer_id":"CUST0004","revenue":142289.15,"cumulative_revenue":1470379.5799999998,"cumulative_share_of_total":0.26786170180414953},{"customer_id":"CUST0012","revenue":141929.38,"cumulative_revenue":1612308.96,"cumulative_share_of_total":0.29371723311043163},{"customer_id":"CUST0018","revenue":141461.17,"cumulative_revenue":1753770.13,"cumulative_share_of_total":0.31948746975599635},{"customer_id":"CUST0010","revenue":139332.54,"cumulative_revenue":1893102.67,"cumulative_share_of_total":0.34486993003274663},{"customer_id":"CUST0029","revenue":138387.21,"cumulative_revenue":2031489.88,"cumulative_share_of_total":0.3700801778372817},{"customer_id":"CUST0025","revenue":138021.07,"cumulative_revenue":2169510.9499999997,"cumulative_share_of_total":0.39522372525721366},{"customer_id":"CUST0011","revenue":138003.7,"cumulative_revenue":2307514.65,"cumulative_share_of_total":0.42036410835289656},{"customer_id":"CUST0026","revenue":137031.49,"cumulative_revenue":2444546.1399999997,"cumulative_share_of_total":0.4453273821982517},{"customer_id":"CUST0033","revenue":136987.61,"cumulative_revenue":2581533.7499999995,"cumulative_share_of_total":0.470282662344813},{"customer_id":"CUST0035","revenue":136761.67,"cumulative_revenue":2718295.4199999995,"cumulative_share_of_total":0.4951967825938017},{"customer_id":"CUST0036","revenue":136362.89,"cumulative_revenue":2854658.3099999996,"cumulative_share_of_total":0.5200382563704792},{"customer_id":"CUST0001","revenue":135801.82,"cumulative_revenue":2990460.1299999994,"cumulative_share_of_total":0.5447775190126473},{"customer_id":"CUST0024","revenue":135795.42,"cumulative_revenue":3126255.5499999993,"cumulative_share_of_total":0.5695156157552647},{"customer_id":"CUST0022","revenue":135720.87,"cumulative_revenue":3261976.4199999995,"cumulative_share_of_total":0.5942401315898357},{"customer_id":"CUST0008","revenue":135543.69,"cumulative_revenue":3397520.1099999994,"cumulative_share_of_total":0.6189323702240351},{"customer_id":"CUST0040","revenue":134633.57,"cumulative_revenue":3532153.6799999992,"cumulative_share_of_total":0.6434588106552659},{"customer_id":"CUST0028","revenue":133653.69,"cumulative_revenue":3665807.369999999,"cumulative_share_of_total":0.6678067445784263},{"customer_id":"CUST0031","revenue":133440.23,"cumulative_revenue":3799247.599999999,"cumulative_share_of_total":0.6921157921081377},{"customer_id":"CUST0006","revenue":133428.09,"cumulative_revenue":3932675.689999999,"cumulative_share_of_total":0.716422628072139},{"customer_id":"CUST0038","revenue":133203.75,"cumulative_revenue":4065879.439999999,"cumulative_share_of_total":0.7406885956134555},{"customer_id":"CUST0021","revenue":132766.96,"cumulative_revenue":4198646.399999999,"cumulative_share_of_total":0.7648749923321609},{"customer_id":"CUST0009","revenue":132538.14,"cumulative_revenue":4331184.539999999,"cumulative_share_of_total":0.7890197044984959},{"customer_id":"CUST0015","revenue":131890.52,"cumulative_revenue":4463075.059999999,"cumulative_share_of_total":0.8130464385606175},{"customer_id":"CUST0020","revenue":131235.32,"cumulative_revenue":4594310.379999999,"cumulative_share_of_total":0.8369538136562458},{"customer_id":"CUST0030","revenue":130604.66,"cumulative_revenue":4724915.039999999,"cumulative_share_of_total":0.8607463002814697},{"customer_id":"CUST0017","revenue":129788.96,"cumulative_revenue":4854703.999999999,"cumulative_share_of_total":0.8843901893655324},{"customer_id":"CUST0032","revenue":129640.33,"cumulative_revenue":4984344.329999999,"cumulative_share_of_total":0.9080070022542502},{"customer_id":"CUST0013","revenue":128538.95,"cumulative_revenue":5112883.279999999,"cumulative_share_of_total":0.9314231747606166},{"customer_id":"CUST0007","revenue":128474.13,"cumulative_revenue":5241357.409999999,"cumulative_share_of_total":0.9548275388905969},{"customer_id":"CUST0014","revenue":128083.39,"cumulative_revenue":5369440.799999999,"cumulative_share_of_total":0.9781607212095764},{"customer_id":"CUST0002","revenue":119882.87,"cumulative_revenue":5489323.669999999,"cumulative_share_of_total":0.9999999999999998}],"origin_id":[{"origin_id":"LOC010","revenue":916906.42,"cumulative_revenue":916906.42,"cumulative_share_of_total":0.16703449734819517},{"origin_id":"LOC005","revenue":726835.17,"cumulative_revenue":1643741.59,"cumulative_share_of_total":0.29944337204659677},{"origin_id":"LOC012","revenue":579444.33,"cumulative_revenue":2223185.92,"cumulative_share_of_total":0.4050017914137681},{"origin_id":"LOC004","revenue":559551.61,"cumulative_revenue":2782737.53,"cumulative_share_of_total":0.5069363180765035},{"origin_id":"LOC007","revenue":543938.11,"cumulative_revenue":3326675.6399999997,"cumulative_share_of_total":0.6060265052652651},{"origin_id":"LOC002","revenue":534541.16,"cumulative_revenue":3861216.8,"cumulative_share_of_total":0.7034048331130746},{"origin_id":"LOC008","revenue":381235.47,"cumulative_revenue":4242452.27,"cumulative_share_of_total":0.772855186730135},{"origin_id":"LOC011","revenue":365852.25,"cumulative_revenue":4608304.52,"cumulative_share_of_total":0.8395031513964268},{"origin_id":"LOC009","revenue":359581.23,"cumulative_revenue":4967885.75,"cumulative_share_of_total":0.9050087130314908},{"origin_id":"LOC001","revenue":346183.97,"cumulative_revenue":5314069.72,"cumulative_share_of_total":0.9680736716332123},{"origin_id":"LOC003","revenue":175253.95,"cumulative_revenue":5489323.67,"cumulative_share_of_total":1.0}],"destination_id":[{"destination_id":"LOC004","revenue":926844.16,"cumulative_revenue":926844.16,"cumulative_share_of_total":0.1688448733794559},{"destination_id":"LOC002","revenue":760119.48,"cumulative_revenue":1686963.6400000001,"cumulative_share_of_total":0.3073172109015026},{"destination_id":"LOC009","revenue":756282.49,"cumulative_revenue":2443246.13,"cumulative_share_of_total":0.44509055703031625},{"destination_id":"LOC011","revenue":541808.74,"cumulative_revenue":2985054.87,"cumulative_share_of_total":0.5437928330431279},{"destination_id":"LOC006","revenue":526085.09,"cumulative_revenue":3511139.96,"cumulative_share_of_total":0.6396307033576688},{"destination_id":"LOC012","revenue":518321.59,"cumulative_revenue":4029461.55,"cumulative_share_of_total":0.7340542828657797},{"destination_id":"LOC003","revenue":395327.22,"cumulative_revenue":4424788.77,"cumulative_share_of_total":0.8060717560128859},{"destination_id":"LOC007","revenue":354104.09,"cumulative_revenue":4778892.859999999,"cumulative_share_of_total":0.8705795371691025},{"destination_id":"LOC001","revenue":328959.38,"cumulative_revenue":5107852.239999999,"cumulative_share_of_total":0.9305066611238829},{"destination_id":"LOC005","revenue":204770.17,"cumulative_revenue":5312622.409999999,"cumulative_share_of_total":0.9678100125584322},{"destination_id":"LOC010","revenue":176701.26,"cumulative_revenue":5489323.669999999,"cumulative_share_of_total":0.9999999999999998}]},"total_revenue":5489323.67,"customer_count":40,"route_count":30,"dataQuality":{"excludedTxnCount":296,"excludedRevenue":81931.17,"excludedMonths":["2025-09","2025-10","2025-11","2025-12"]}};
+
+const STRATEGY_LABELS = {
+  direct_cost_only: "Direct cost only",
+  proportional_by_revenue: "Proportional by revenue",
+  per_unit_by_quantity: "Per-unit by quantity"
+};
+
+let currentStrategy = "proportional_by_revenue";
+
+function fmtCompact(n) {
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(2) + "M";
+  if (abs >= 1e3) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
+  return sign + "$" + abs.toFixed(0);
+}
+function fmtFull(n) {
+  const sign = n < 0 ? "-" : "";
+  return sign + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtInt(n) { return n.toLocaleString(); }
+function fmtPct(n) { return (n * 100).toFixed(1) + "%"; }
+
+function clear(el) { el.replaceChildren(); }
+
+/* ---------------- tooltip ---------------- */
+const tooltipEl = document.getElementById("tooltip");
+const ttTitle = tooltipEl.querySelector(".tt-title");
+const ttBody = tooltipEl.querySelector(".tt-body");
+
+function showTooltip(evt, title, rows) {
+  ttTitle.textContent = title;
+  clear(ttBody);
+  rows.forEach(r => {
+    const row = document.createElement("div");
+    row.className = "tt-row";
+    if (r.color) {
+      const sw = document.createElement("span");
+      sw.className = "tt-swatch";
+      sw.style.background = r.color;
+      row.appendChild(sw);
+    }
+    const val = document.createElement("span");
+    val.className = "tt-value";
+    val.textContent = r.value;
+    const lab = document.createElement("span");
+    lab.className = "tt-label";
+    lab.textContent = r.label;
+    row.appendChild(val);
+    row.appendChild(lab);
+    ttBody.appendChild(row);
+  });
+  tooltipEl.style.display = "block";
+  positionTooltip(evt);
+}
+function positionTooltip(evt) {
+  const x = evt.clientX, y = evt.clientY;
+  const tw = tooltipEl.offsetWidth || 180;
+  const left = Math.min(Math.max(8, x + 14), window.innerWidth - tw - 8);
+  const top = Math.max(8, y - 14);
+  tooltipEl.style.left = left + "px";
+  tooltipEl.style.top = top + "px";
+}
+function hideTooltip() { tooltipEl.style.display = "none"; }
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest(".fill, .segment, .hoverzone")) hideTooltip();
+});
+
+function wireHover(elm, title, rows) {
+  elm.setAttribute("tabindex", "0");
+  elm.addEventListener("pointerenter", (e) => showTooltip(e, title, rows));
+  elm.addEventListener("pointermove", positionTooltip);
+  elm.addEventListener("pointerleave", hideTooltip);
+  elm.addEventListener("pointerdown", (e) => { e.stopPropagation(); showTooltip(e, title, rows); });
+  elm.addEventListener("focus", (e) => {
+    const r = elm.getBoundingClientRect();
+    showTooltip({ clientX: r.left + r.width / 2, clientY: r.top }, title, rows);
+  });
+  elm.addEventListener("blur", hideTooltip);
+}
+
+/* ---------------- KPI row + footnote ---------------- */
+const STRATEGY_EXPLANATIONS = {
+  direct_cost_only: (k) =>
+    `<strong>Data note:</strong> ${fmtInt(k.null_allocated_rows)} rows (${fmtPct(k.null_allocated_rows / k.txn_count)}) ` +
+    `have no allocated cost because <span class="mono">direct_cost</span> itself was missing on those lines &mdash; ` +
+    `this strategy never estimates it, it only ever uses what was directly recorded.`,
+  proportional_by_revenue: (k) =>
+    `<strong>Data note:</strong> ${fmtInt(k.null_allocated_rows)} transactions (${fmtFull(DATA.dataQuality.excludedRevenue)} revenue, ` +
+    `in ${DATA.dataQuality.excludedMonths.join(", ")}) have no allocated cost. Their <span class="mono">txn_date</span> falls outside the ` +
+    `overhead file&rsquo;s covered months &mdash; a consequence of ambiguous D/M vs M/D dates in the source export, resolved ` +
+    `day-first by <span class="mono">clean.py</span>&rsquo;s stated policy. Their margin sums to $0 in those months below, not a real collapse ` +
+    `&mdash; switch to &ldquo;Direct cost only&rdquo; and the <em>margin %</em> column for those months returns to a normal ~35&ndash;40% in the table ` +
+    `(that strategy never touches the overhead pool). The dollar amounts stay small either way, since only ~60&ndash;85 transactions fall in ` +
+    `this window regardless of strategy &mdash; too small to show up clearly on the chart at this scale.`,
+  per_unit_by_quantity: (k) => STRATEGY_EXPLANATIONS.proportional_by_revenue(k)
+};
+
+function renderKpis() {
+  const k = DATA.strategies[currentStrategy].kpis;
+  const marginGood = k.total_margin >= 0;
+  clear(document.getElementById("kpi-row"));
+  const tiles = [
+    { label: "Revenue", value: fmtCompact(k.total_revenue), sub: `${fmtInt(k.txn_count)} transactions` },
+    { label: "Allocated cost", value: fmtCompact(k.total_allocated_cost), sub: STRATEGY_LABELS[currentStrategy] },
+    { label: "Margin", value: fmtCompact(k.total_margin), sub: null, dot: marginGood ? "good" : "critical" },
+    { label: "Margin %", value: fmtPct(k.overall_margin_pct), sub: "of revenue", dot: marginGood ? "good" : "critical" },
+    { label: "Coverage", value: `${DATA.customer_count} &middot; ${DATA.route_count}`, sub: "customers &middot; routes" }
+  ];
+  const row = document.getElementById("kpi-row");
+  tiles.forEach(t => {
+    const tile = document.createElement("div");
+    tile.className = "kpi";
+    tile.innerHTML = `
+      <div class="label">${t.label}</div>
+      <div class="value">${t.dot ? `<span class="dot ${t.dot}"></span>` : ""}<span class="mono">${t.value}</span></div>
+      ${t.sub ? `<div class="sub">${t.sub}</div>` : ""}
+    `;
+    row.appendChild(tile);
+  });
+  document.getElementById("data-footnote").innerHTML = STRATEGY_EXPLANATIONS[currentStrategy](k);
+}
+
+/* ---------------- generic HTML bar list ---------------- */
+function renderBarList(containerId, items, opts) {
+  const container = document.getElementById(containerId);
+  clear(container);
+  const max = Math.max(...items.map(opts.value), 1e-9);
+  items.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "barrow";
+    const pct = (opts.value(item) / max) * 100;
+
+    const labelDiv = document.createElement("div");
+    labelDiv.className = "rlabel";
+    labelDiv.innerHTML = opts.label(item);
+
+    const track = document.createElement("div");
+    track.className = "track";
+    const fill = document.createElement("div");
+    fill.className = "fill";
+    fill.style.width = Math.max(pct, 0) + "%";
+    fill.style.background = opts.color;
+    track.appendChild(fill);
+
+    const valueDiv = document.createElement("div");
+    valueDiv.className = "rvalue mono";
+    valueDiv.innerHTML = opts.valueLabel(item);
+
+    row.appendChild(labelDiv);
+    row.appendChild(track);
+    row.appendChild(valueDiv);
+    container.appendChild(row);
+
+    wireHover(fill, opts.tooltipTitle(item), opts.tooltipRows(item));
+  });
+}
+
+function renderCustomerSection() {
+  const items = DATA.strategies[currentStrategy].by_customer;
+  document.getElementById("customer-hint").textContent = `All ${items.length}, sorted by margin`;
+  renderBarList("chart-customer", items, {
+    value: d => d.revenue,
+    color: "var(--series-revenue)",
+    label: d => `${d.customer_id}`,
+    valueLabel: d => `${fmtCompact(d.revenue)}<span class="sub">${fmtPct(d.margin_pct)} margin</span>`,
+    tooltipTitle: d => d.customer_id,
+    tooltipRows: d => [
+      { color: "var(--series-revenue)", value: fmtFull(d.revenue), label: "revenue" },
+      { color: "var(--series-margin)", value: fmtFull(d.margin), label: `margin (${fmtPct(d.margin_pct)})` },
+      { value: fmtInt(d.txn_count), label: "transactions" }
+    ]
+  });
+  renderTable("table-customer", [
+    { header: "Customer", render: d => d.customer_id, mono: false },
+    { header: "Revenue", render: d => fmtFull(d.revenue) },
+    { header: "Margin", render: d => fmtFull(d.margin) },
+    { header: "Margin %", render: d => fmtPct(d.margin_pct) },
+    { header: "Txns", render: d => fmtInt(d.txn_count) }
+  ], items);
+}
+
+function renderRouteSection() {
+  const items = DATA.strategies[currentStrategy].by_route;
+  document.getElementById("route-hint").textContent = `All ${items.length}, sorted by margin`;
+  renderBarList("chart-route", items, {
+    value: d => d.revenue,
+    color: "var(--series-revenue)",
+    label: d => `${d.origin_id}<span class="mono">&rarr; ${d.destination_id}</span>`,
+    valueLabel: d => `${fmtCompact(d.revenue)}<span class="sub">${fmtPct(d.margin_pct)} margin</span>`,
+    tooltipTitle: d => `${d.origin_id} → ${d.destination_id}`,
+    tooltipRows: d => [
+      { color: "var(--series-revenue)", value: fmtFull(d.revenue), label: "revenue" },
+      { color: "var(--series-margin)", value: fmtFull(d.margin), label: `margin (${fmtPct(d.margin_pct)})` },
+      { value: fmtInt(d.txn_count), label: "transactions" }
+    ]
+  });
+  renderTable("table-route", [
+    { header: "Route", render: d => `${d.origin_id} → ${d.destination_id}`, mono: false },
+    { header: "Revenue", render: d => fmtFull(d.revenue) },
+    { header: "Margin", render: d => fmtFull(d.margin) },
+    { header: "Margin %", render: d => fmtPct(d.margin_pct) },
+    { header: "Txns", render: d => fmtInt(d.txn_count) }
+  ], items);
+}
+
+/* ---------------- tables ---------------- */
+function renderTable(tableId, columns, rows) {
+  const table = document.getElementById(tableId);
+  clear(table);
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  columns.forEach(c => {
+    const th = document.createElement("th");
+    th.textContent = c.header;
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  const tbody = document.createElement("tbody");
+  rows.forEach(row => {
+    const tr = document.createElement("tr");
+    columns.forEach(c => {
+      const td = document.createElement("td");
+      if (c.mono !== false) td.className = "mono";
+      td.textContent = c.render(row);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+}
+
+function renderMonthTable() {
+  renderTable("table-month", [
+    { header: "Month", render: d => d.period_label, mono: false },
+    { header: "Revenue", render: d => fmtFull(d.revenue) },
+    { header: "Margin", render: d => fmtFull(d.margin) },
+    { header: "Margin %", render: d => fmtPct(d.margin_pct) },
+    { header: "Txns", render: d => fmtInt(d.txn_count) }
+  ], DATA.strategies[currentStrategy].by_month);
+}
+function renderConcentrationTable(rows) {
+  renderTable("table-concentration", [
+    { header: "Group", render: d => d.key, mono: false },
+    { header: "Revenue", render: d => fmtFull(d.revenue) },
+    { header: "Cumulative", render: d => fmtFull(d.cumulative_revenue) },
+    { header: "Cum. share", render: d => fmtPct(d.cumulative_share) }
+  ], rows);
+}
+function renderStrategyTable() {
+  renderTable("table-strategy", [
+    { header: "Strategy", render: d => d.label, mono: false },
+    { header: "Revenue", render: d => fmtFull(d.total_revenue) },
+    { header: "Allocated cost", render: d => fmtFull(d.total_allocated_cost) },
+    { header: "Margin", render: d => fmtFull(d.total_margin) },
+    { header: "Null rows", render: d => fmtInt(d.null_rows) }
+  ], Object.keys(DATA.strategies).map(name => ({
+    label: STRATEGY_LABELS[name],
+    total_revenue: DATA.strategies[name].kpis.total_revenue,
+    total_allocated_cost: DATA.strategies[name].kpis.total_allocated_cost,
+    total_margin: DATA.strategies[name].kpis.total_margin,
+    null_rows: DATA.strategies[name].kpis.null_allocated_rows
+  })));
+}
+
+/* ---------------- month line/area chart (SVG) ---------------- */
+function renderMonthChart() {
+  const data = DATA.strategies[currentStrategy].by_month;
+  const container = document.getElementById("chart-month");
+  clear(container);
+
+  const W = 900, H = 300;
+  const padL = 54, padR = 16, padT = 16, padB = 28;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  const maxVal = Math.max(...data.map(d => d.revenue));
+  const niceMax = Math.ceil(maxVal / 50000) * 50000;
+  const yTicks = 4;
+
+  const xAt = i => padL + (i / (data.length - 1)) * plotW;
+  const yAt = v => padT + plotH - (v / niceMax) * plotH;
+
+  const svgns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Monthly revenue and margin, January 2024 through December 2025");
+
+  function el(tag, attrs) {
+    const e = document.createElementNS(svgns, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  for (let t = 0; t <= yTicks; t++) {
+    const v = (niceMax / yTicks) * t;
+    const y = yAt(v);
+    svg.appendChild(el("line", { class: "gridline", x1: padL, x2: W - padR, y1: y, y2: y }));
+    const label = el("text", { class: "axislabel", x: padL - 8, y: y + 3, "text-anchor": "end" });
+    label.textContent = fmtCompact(v);
+    svg.appendChild(label);
+  }
+
+  const tickIdxs = [];
+  for (let i = 0; i < data.length; i += 3) tickIdxs.push(i);
+  const lastIdx = data.length - 1;
+  if (tickIdxs[tickIdxs.length - 1] !== lastIdx) {
+    if (lastIdx - tickIdxs[tickIdxs.length - 1] < 2) tickIdxs.pop();
+    tickIdxs.push(lastIdx);
+  }
+  tickIdxs.forEach(i => {
+    const label = el("text", { class: "axislabel", x: xAt(i), y: H - 8, "text-anchor": "middle" });
+    label.textContent = data[i].period_label;
+    svg.appendChild(label);
+  });
+
+  const areaPts = data.map((d, i) => `${xAt(i)},${yAt(d.margin)}`).join(" L ");
+  const areaPath = `M ${xAt(0)},${yAt(0)} L ${areaPts} L ${xAt(data.length - 1)},${yAt(0)} Z`;
+  svg.appendChild(el("path", { d: areaPath, fill: "var(--series-margin-wash)", stroke: "none" }));
+
+  const marginLine = data.map((d, i) => `${xAt(i)},${yAt(d.margin)}`).join(" L ");
+  svg.appendChild(el("path", { d: `M ${marginLine}`, fill: "none", stroke: "var(--series-margin)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+
+  const revLine = data.map((d, i) => `${xAt(i)},${yAt(d.revenue)}`).join(" L ");
+  svg.appendChild(el("path", { d: `M ${revLine}`, fill: "none", stroke: "var(--series-revenue)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+
+  const last = data.length - 1;
+  [
+    { v: data[last].revenue, color: "var(--series-revenue)" },
+    { v: data[last].margin, color: "var(--series-margin)" }
+  ].forEach(pt => {
+    svg.appendChild(el("circle", { cx: xAt(last), cy: yAt(pt.v), r: 5, fill: pt.color, stroke: "var(--panel)", "stroke-width": 2 }));
+  });
+
+  const crosshair = el("line", { class: "crosshair", x1: padL, x2: padL, y1: padT, y2: padT + plotH });
+  svg.appendChild(crosshair);
+
+  const hitzone = el("rect", { class: "hoverzone", x: padL, y: padT, width: plotW, height: plotH, fill: "transparent", tabindex: "0" });
+  svg.appendChild(hitzone);
+
+  function nearestIndex(clientX) {
+    const rect = svg.getBoundingClientRect();
+    const relX = ((clientX - rect.left) / rect.width) * W;
+    const t = (relX - padL) / plotW;
+    return Math.max(0, Math.min(data.length - 1, Math.round(t * (data.length - 1))));
+  }
+  function activate(i, evt) {
+    crosshair.setAttribute("x1", xAt(i));
+    crosshair.setAttribute("x2", xAt(i));
+    crosshair.style.opacity = 1;
+    const d = data[i];
+    showTooltip(evt, d.period_label, [
+      { color: "var(--series-revenue)", value: fmtFull(d.revenue), label: "revenue" },
+      { color: "var(--series-margin)", value: fmtFull(d.margin), label: `margin (${fmtPct(d.margin_pct)})` }
+    ]);
+  }
+  hitzone.addEventListener("pointermove", (e) => activate(nearestIndex(e.clientX), e));
+  hitzone.addEventListener("pointerenter", (e) => activate(nearestIndex(e.clientX), e));
+  hitzone.addEventListener("pointerdown", (e) => { e.stopPropagation(); activate(nearestIndex(e.clientX), e); });
+  hitzone.addEventListener("pointerleave", () => { crosshair.style.opacity = 0; hideTooltip(); });
+  hitzone.addEventListener("focus", () => activate(0, { clientX: xAt(0), clientY: padT }));
+  hitzone.addEventListener("blur", () => { crosshair.style.opacity = 0; hideTooltip(); });
+
+  container.appendChild(svg);
+}
+
+/* ---------------- concentration strip (independent of strategy) ---------------- */
+const CONC_DIM_LABELS = { customer_id: "customer_id", origin_id: "origin_id", destination_id: "destination_id" };
+
+function renderConcentration() {
+  const dim = document.getElementById("conc-dim").value;
+  const topN = parseInt(document.getElementById("conc-topn").value, 10);
+  document.getElementById("conc-topn-val").textContent = topN;
+
+  const full = DATA.concentration[dim];
+  const items = full.slice(0, topN);
+  const totalRevenue = DATA.total_revenue;
+  const topSum = items.reduce((a, d) => a + d.revenue, 0);
+  const otherShare = 1 - topSum / totalRevenue;
+
+  const strip = document.getElementById("chart-concentration");
+  clear(strip);
+  items.forEach(d => {
+    const key = d[dim];
+    const seg = document.createElement("div");
+    seg.className = "segment";
+    seg.style.width = ((d.revenue / totalRevenue) * 100) + "%";
+    strip.appendChild(seg);
+    wireHover(seg, key, [
+      { color: "var(--series-revenue)", value: fmtFull(d.revenue), label: `${fmtPct(d.revenue / totalRevenue)} of total` },
+      { value: fmtPct(d.cumulative_share_of_total), label: "cumulative share" }
+    ]);
+  });
+  if (otherShare > 0.0001) {
+    const other = document.createElement("div");
+    other.className = "segment other";
+    other.style.width = (otherShare * 100) + "%";
+    strip.appendChild(other);
+    wireHover(other, `Remaining ${full.length - items.length}`, [
+      { value: fmtPct(otherShare), label: "of total revenue" }
+    ]);
+  }
+
+  const lastCum = items.length ? items[items.length - 1].cumulative_share_of_total : 0;
+  document.getElementById("concentration-caption").textContent =
+    `Top ${items.length} of ${full.length} hold ${fmtPct(lastCum)} of revenue; the remaining ${full.length - items.length} hold ${fmtPct(otherShare)}.`;
+
+  renderConcentrationTable(items.map(d => ({
+    key: d[dim],
+    revenue: d.revenue,
+    cumulative_revenue: d.cumulative_revenue,
+    cumulative_share: d.cumulative_share_of_total
+  })));
+}
+
+/* ---------------- strategy comparison (static reference) ---------------- */
+function renderStrategyChart() {
+  const rows = Object.keys(DATA.strategies).map(name => ({
+    key: name,
+    label: STRATEGY_LABELS[name],
+    total_revenue: DATA.strategies[name].kpis.total_revenue,
+    total_allocated_cost: DATA.strategies[name].kpis.total_allocated_cost,
+    total_margin: DATA.strategies[name].kpis.total_margin,
+    null_rows: DATA.strategies[name].kpis.null_allocated_rows
+  }));
+  const max = Math.max(...rows.flatMap(r => [r.total_allocated_cost, r.total_margin]));
+  const container = document.getElementById("chart-strategy");
+  clear(container);
+
+  rows.forEach(r => {
+    const group = document.createElement("div");
+    group.className = "strategy-group" + (r.key === currentStrategy ? " active" : "");
+    const badge = r.key === currentStrategy ? '<span class="activepill">selected</span>' : "";
+    const nullBadge = r.null_rows > 0 ? `<span class="nullpill">${fmtInt(r.null_rows)} null rows</span>` : "";
+    group.innerHTML = `<div class="gname">${r.label}${badge}${nullBadge}</div>`;
+
+    const list = document.createElement("div");
+    list.className = "barlist";
+    [
+      { value: r.total_allocated_cost, color: "var(--series-cost)", label: "Cost" },
+      { value: r.total_margin, color: "var(--series-margin)", label: "Margin" }
+    ].forEach(series => {
+      const row = document.createElement("div");
+      row.className = "barrow";
+      row.innerHTML = `<div class="rlabel">${series.label}</div>`;
+      const track = document.createElement("div");
+      track.className = "track";
+      const fill = document.createElement("div");
+      fill.className = "fill";
+      fill.style.width = ((series.value / max) * 100) + "%";
+      fill.style.background = series.color;
+      track.appendChild(fill);
+      const valueDiv = document.createElement("div");
+      valueDiv.className = "rvalue mono";
+      valueDiv.textContent = fmtCompact(series.value);
+      row.appendChild(track);
+      row.appendChild(valueDiv);
+      list.appendChild(row);
+      wireHover(fill, r.label, [
+        { color: series.color, value: fmtFull(series.value), label: series.label.toLowerCase() },
+        { value: fmtFull(r.total_revenue), label: "revenue (constant across strategies)" }
+      ]);
+    });
+    group.appendChild(list);
+    container.appendChild(group);
+  });
+}
+
+/* ---------------- orchestration ---------------- */
+function renderStrategyDependent() {
+  renderKpis();
+  renderCustomerSection();
+  renderRouteSection();
+  renderMonthChart();
+  renderMonthTable();
+  renderStrategyChart();
+}
+
+document.getElementById("strategy-select").addEventListener("change", (e) => {
+  currentStrategy = e.target.value;
+  renderStrategyDependent();
+});
+document.getElementById("conc-dim").addEventListener("change", renderConcentration);
+document.getElementById("conc-topn").addEventListener("input", renderConcentration);
+
+renderStrategyDependent();
+renderConcentration();
+renderStrategyTable();
+</script>

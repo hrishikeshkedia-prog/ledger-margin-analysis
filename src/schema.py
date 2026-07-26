@@ -1,13 +1,24 @@
 """Canonical schemas for the ledger analysis project.
 
 This module is the single source of truth for column names and expected
-types, across *two* input files:
+types, across input files for two independent, dormant-or-not-by-choice
+pipelines:
 
-- the transaction ledger (``LEDGER_SCHEMA``) - one row per invoice line
-- the period overhead file (``OVERHEAD_SCHEMA``) - one row per month per
-  cost category, covering costs that are not attributable to a single
-  transaction (driver salaries, EMIs, rent, office). ``margin.py``'s
-  allocation strategies distribute this pool across transactions.
+- the cost/margin pipeline: the transaction ledger (``LEDGER_SCHEMA``) -
+  one row per invoice line - and the period overhead file
+  (``OVERHEAD_SCHEMA``) - one row per month per cost category, covering
+  costs that are not attributable to a single transaction (driver
+  salaries, EMIs, rent, office). ``margin.py``'s allocation strategies
+  distribute this pool across transactions.
+- the routing/empty-running pipeline: the trip ledger (``TRIPS_SCHEMA``)
+  - one row per vehicle trip, no cost data - and the distance matrix
+  (``DISTANCE_SCHEMA``). ``routing.py`` detects dead-head legs and
+  quantifies utilisation from these.
+
+Only one of these pipelines may have data available on a given real
+export (freight ledgers so far have had either costed invoice lines or
+vehicle trip logs, not both) - each schema and its pipeline stands
+alone and neither assumes the other ran.
 
 Every other module must reference columns through the constants below
 (e.g. ``schema.REVENUE``), never as hardcoded string literals, so that a
@@ -140,6 +151,38 @@ OVERHEAD_SCHEMA = Schema(
         ColumnSpec(COST_CATEGORY, STRING, nullable=False, notes="e.g. driver_salaries, emi, rent, office"),
         ColumnSpec(AMOUNT, FLOAT, nullable=False),
         ColumnSpec(DESCRIPTION, STRING, nullable=True),
+    ),
+)
+
+# --- Trip column name constants ---------------------------------------------
+# TXN_ID, ORIGIN_ID, DESTINATION_ID, and REVENUE are shared with the ledger
+# schema above: same concept, same column name, different file.
+
+TRIP_DATE = "date"  # deliberately not TXN_DATE - the real trip export's own column name
+VEHICLE_ID = "vehicle_id"
+
+TRIPS_SCHEMA = Schema(
+    name="trips",
+    columns=(
+        ColumnSpec(TXN_ID, STRING, nullable=False, unique=True),
+        ColumnSpec(TRIP_DATE, DATETIME, nullable=False),
+        ColumnSpec(VEHICLE_ID, STRING, nullable=False),
+        ColumnSpec(ORIGIN_ID, STRING, nullable=False, notes="every trip has an origin - unlike the ledger schema, not nullable here"),
+        ColumnSpec(DESTINATION_ID, STRING, nullable=False, notes="every trip has a destination - unlike the ledger schema, not nullable here"),
+        ColumnSpec(REVENUE, FLOAT, nullable=False, notes="rupees; no cost columns exist in this pipeline"),
+    ),
+)
+
+# --- Distance matrix column name constants ----------------------------------
+
+DISTANCE_KM = "km"
+
+DISTANCE_SCHEMA = Schema(
+    name="distances",
+    columns=(
+        ColumnSpec(ORIGIN_ID, STRING, nullable=False),
+        ColumnSpec(DESTINATION_ID, STRING, nullable=False),
+        ColumnSpec(DISTANCE_KM, FLOAT, nullable=False),
     ),
 )
 

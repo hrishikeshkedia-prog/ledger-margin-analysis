@@ -32,6 +32,7 @@ ID_COLUMNS = [
     schema.ORIGIN_ID,
     schema.DESTINATION_ID,
     schema.VENDOR_ID,
+    schema.VEHICLE_ID,  # trips-only column; a no-op on ledger data, which doesn't have it
 ]
 
 # Explicit, stated policy per nullable column. Every entry here means
@@ -76,13 +77,18 @@ def _parse_one_date(value):
     return pd.NaT
 
 
-def normalise_dates(df: pd.DataFrame, log: DecisionLog) -> pd.DataFrame:
-    """Parse txn_date / payment_date from mixed string formats into
-    real dates. Values that match none of DATE_FORMATS become null
-    rather than being guessed at.
+def normalise_dates(
+    df: pd.DataFrame,
+    log: DecisionLog,
+    date_columns: tuple[str, ...] = (schema.TXN_DATE, schema.PAYMENT_DATE),
+) -> pd.DataFrame:
+    """Parse date columns from mixed string formats into real dates.
+    Values that match none of DATE_FORMATS become null rather than
+    being guessed at. Defaults to the ledger's txn_date/payment_date;
+    pass date_columns=(schema.TRIP_DATE,) for the trips schema.
     """
     df = df.copy()
-    for col in (schema.TXN_DATE, schema.PAYMENT_DATE):
+    for col in date_columns:
         if col not in df.columns:
             continue
         had_value = df[col].notna()
@@ -199,8 +205,8 @@ def handle_nulls(df: pd.DataFrame, log: DecisionLog) -> pd.DataFrame:
 
 
 def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, DecisionLog]:
-    """Run the full cleaning pipeline in order, returning the cleaned
-    DataFrame alongside the full decision log.
+    """Run the full ledger cleaning pipeline in order, returning the
+    cleaned DataFrame alongside the full decision log.
     """
     log: DecisionLog = []
     df = normalise_dates(df, log)
@@ -208,4 +214,19 @@ def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, DecisionLog]:
     df = deduplicate_txn_id(df, log)
     df = flag_customer_name_variants(df, log)
     df = handle_nulls(df, log)
+    return df, log
+
+
+def clean_trips(df: pd.DataFrame) -> tuple[pd.DataFrame, DecisionLog]:
+    """Cleaning pipeline for the routing dataset (schema.TRIPS_SCHEMA).
+
+    Reuses the shared date/ID/dedup steps above; skips
+    flag_customer_name_variants (no customer_id in this schema) and
+    handle_nulls (TRIPS_SCHEMA has no nullable columns - a null here is
+    a validation failure downstream, not a policy decision to log).
+    """
+    log: DecisionLog = []
+    df = normalise_dates(df, log, date_columns=(schema.TRIP_DATE,))
+    df = normalise_ids(df, log)
+    df = deduplicate_txn_id(df, log)
     return df, log

@@ -1,18 +1,29 @@
-"""Synthetic ledger + overhead data generator.
+"""Synthetic data generator for both pipelines this project supports.
 
-Produces two CSVs matching ``schema.LEDGER_SCHEMA`` and
-``schema.OVERHEAD_SCHEMA``, seeded with the kind of mess a real
-accounting-software export tends to have: inconsistent date formats,
-whitespace/casing variants in IDs, a few negative and zero-revenue
-rows, ~5% missing direct_cost, and occasional duplicate txn_id.
+Two independent modes:
 
-This generator deliberately does not plant a discoverable pattern or
-anomaly - variation is pure noise plus mild seasonality. It exists to
-exercise the rest of the pipeline's code paths, not to produce
-insights.
+- ``--mode ledger`` (default): two CSVs matching ``schema.LEDGER_SCHEMA``
+  and ``schema.OVERHEAD_SCHEMA``, seeded with the kind of mess a real
+  accounting-software export tends to have: inconsistent date formats,
+  whitespace/casing variants in IDs, a few negative and zero-revenue
+  rows, ~5% missing direct_cost, and occasional duplicate txn_id.
+- ``--mode trips``: one CSV matching ``schema.TRIPS_SCHEMA`` (no cost
+  columns) for the routing/empty-running pipeline - a vehicle ledger
+  with the same category of mess (inconsistent dates, whitespace/
+  casing in IDs, a few duplicates), scaled to a few hundred trips
+  rather than tens of thousands of invoice lines.
+
+Neither mode plants a discoverable pattern or anomaly - variation is
+pure noise (plus mild seasonality in ledger mode). They exist to
+exercise the rest of each pipeline's code paths, not to produce
+insights. In trips mode in particular: origin and destination are
+drawn independently and uniformly at random for every trip, with no
+memory of where the vehicle's previous trip ended - any empty running
+that shows up is an accident of the random draw, never designed in.
 
 CLI:
     python -m src.synth --rows 20000 --seed 42 --out data/synthetic/ledger.csv
+    python -m src.synth --mode trips --rows 400 --seed 42 --out data/synthetic/trips.csv
 """
 
 from __future__ import annotations
@@ -75,6 +86,16 @@ class SynthConfig:
                 f"origin->destination pairs available from {self.n_locations} "
                 f"locations ({max_possible_routes})"
             )
+
+
+@dataclass
+class TripsConfig:
+    rows: int = 400
+    seed: int = 42
+    n_vehicles: int = 12
+    n_locations: int = 10
+    n_months: int = 4
+    start_month: date = date(2024, 1, 1)
 
 
 def _month_range(start: date, n_months: int) -> list[date]:
@@ -231,41 +252,114 @@ def generate_overhead(cfg: SynthConfig) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def generate_trips(cfg: TripsConfig) -> pd.DataFrame:
+    """Vehicle trip ledger for the routing pipeline: txn_id, date,
+    vehicle_id, origin_id, destination_id, revenue - no cost columns,
+    matching the real freight export's shape.
+
+    origin_id and destination_id are drawn independently and uniformly
+    at random for every trip (rejecting only origin == destination,
+    since a trip has to go somewhere) - deliberately with no memory of
+    where the same vehicle's previous trip ended. Any empty running
+    that emerges from that is an accident of the random draw, not a
+    planted pattern.
+    """
+    rng = random.Random(cfg.seed)
+    np_rng = np.random.default_rng(cfg.seed)
+
+    vehicles = [f"VEH{idx:03d}" for idx in range(1, cfg.n_vehicles + 1)]
+    locations = [f"LOC{idx:03d}" for idx in range(1, cfg.n_locations + 1)]
+    day_span = cfg.n_months * 30
+
+    rows = []
+    for i in range(cfg.rows):
+        trip_date = cfg.start_month + timedelta(days=rng.randint(0, day_span - 1))
+        origin, destination = rng.sample(locations, 2)
+        revenue = round(np_rng.uniform(5000, 40000), 2)
+
+        rows.append(
+            {
+                schema.TXN_ID: f"TRIP{i:04d}",
+                schema.TRIP_DATE: trip_date,
+                schema.VEHICLE_ID: rng.choice(vehicles),
+                schema.ORIGIN_ID: origin,
+                schema.DESTINATION_ID: destination,
+                schema.REVENUE: revenue,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    # Occasional duplicate txn_id, same reasoning as generate_ledger.
+    n_dupes = max(1, int(cfg.rows * 0.01))
+    dupe_positions = rng.sample(range(len(df)), min(n_dupes, len(df)))
+    df = pd.concat([df, df.iloc[dupe_positions]], ignore_index=True)
+
+    df[schema.VEHICLE_ID] = df[schema.VEHICLE_ID].map(lambda v: _messy_id(rng, v))
+    df[schema.TRIP_DATE] = df[schema.TRIP_DATE].map(lambda d: _messy_date(rng, d))
+
+    return df.sample(frac=1, random_state=cfg.seed).reset_index(drop=True)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rows", type=int, default=20000)
+    parser.add_argument("--mode", choices=["ledger", "trips"], default="ledger")
     parser.add_argument("--seed", type=int, default=42)
+    # Shared numeric knobs - default is None here and resolved per-mode in
+    # main(), since "rows"/"locations"/"months" mean sensible but different
+    # defaults for a 20k-line invoice ledger vs. a few-hundred-trip log.
+    parser.add_argument("--rows", type=int, default=None)
+    parser.add_argument("--locations", type=int, default=None)
+    parser.add_argument("--months", type=int, default=None)
+    # ledger-mode only
     parser.add_argument("--customers", type=int, default=40)
-    parser.add_argument("--locations", type=int, default=12)
     parser.add_argument("--routes", type=int, default=30)
     parser.add_argument("--vendors", type=int, default=15)
-    parser.add_argument("--months", type=int, default=20)
-    parser.add_argument("--out", type=Path, default=Path("data/synthetic/ledger.csv"))
+    # trips-mode only
+    parser.add_argument("--vehicles", type=int, default=12)
+    parser.add_argument("--out", type=Path, default=None)
     parser.add_argument(
         "--overhead-out",
         type=Path,
         default=None,
-        help="defaults to overhead.csv next to --out",
+        help="ledger mode only; defaults to overhead.csv next to --out",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
+
+    if args.mode == "trips":
+        cfg = TripsConfig(
+            rows=args.rows if args.rows is not None else 400,
+            seed=args.seed,
+            n_vehicles=args.vehicles,
+            n_locations=args.locations if args.locations is not None else 10,
+            n_months=args.months if args.months is not None else 4,
+        )
+        trips_df = generate_trips(cfg)
+
+        out_path: Path = args.out or Path("data/synthetic/trips.csv")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        trips_df.to_csv(out_path, index=False)
+        print(f"wrote {len(trips_df)} trip rows to {out_path}")
+        return
+
     cfg = SynthConfig(
-        rows=args.rows,
+        rows=args.rows if args.rows is not None else 20000,
         seed=args.seed,
         n_customers=args.customers,
-        n_locations=args.locations,
+        n_locations=args.locations if args.locations is not None else 12,
         n_routes=args.routes,
         n_vendors=args.vendors,
-        n_months=args.months,
+        n_months=args.months if args.months is not None else 20,
     )
 
     ledger_df = generate_ledger(cfg)
     overhead_df = generate_overhead(cfg)
 
-    out_path: Path = args.out
+    out_path: Path = args.out or Path("data/synthetic/ledger.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_df.to_csv(out_path, index=False)
 

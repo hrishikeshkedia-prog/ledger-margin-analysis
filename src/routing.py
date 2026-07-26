@@ -58,7 +58,11 @@ def detect_empty_legs(trips_df: pd.DataFrame, distances_df: pd.DataFrame) -> pd.
     dist = _distance_map(distances_df)
 
     rows = []
-    for vehicle_id, group in trips_df.sort_values(schema.TRIP_DATE).groupby(schema.VEHICLE_ID):
+    # kind="stable": pandas' default quicksort doesn't preserve original
+    # row order for same-date trips, which would make tie-breaking
+    # between two same-day trips for one vehicle arbitrary (and able to
+    # flip which leg reads as empty) between otherwise-identical runs.
+    for vehicle_id, group in trips_df.sort_values(schema.TRIP_DATE, kind="stable").groupby(schema.VEHICLE_ID):
         trips = group.reset_index(drop=True)
         for i in range(len(trips) - 1):
             current = trips.iloc[i]
@@ -145,7 +149,11 @@ def utilisation(trips_df: pd.DataFrame) -> pd.DataFrame:
     _require_datetime(trips_df, schema.TRIP_DATE)
 
     rows = []
-    for vehicle_id, group in trips_df.sort_values(schema.TRIP_DATE).groupby(schema.VEHICLE_ID):
+    # kind="stable": pandas' default quicksort doesn't preserve original
+    # row order for same-date trips, which would make tie-breaking
+    # between two same-day trips for one vehicle arbitrary (and able to
+    # flip which leg reads as empty) between otherwise-identical runs.
+    for vehicle_id, group in trips_df.sort_values(schema.TRIP_DATE, kind="stable").groupby(schema.VEHICLE_ID):
         trips = group.reset_index(drop=True)
         for i in range(len(trips) - 1):
             gap = (trips.loc[i + 1, schema.TRIP_DATE] - trips.loc[i, schema.TRIP_DATE]).days

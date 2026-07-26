@@ -1,0 +1,664 @@
+<title>Freight Empty-Running Tool</title>
+<style>
+  :root {
+    color-scheme: light;
+    --ink: #1b2430;
+    --ink-soft: #4b5563;
+    --muted: #7a8073;
+    --paper: #eef1ec;
+    --panel: #f8f9f6;
+    --hairline: #c9cdc2;
+    --hairline-soft: #dde0d7;
+    --brass: #b8863b;
+    --brass-ink: #7d5a24;
+    --brass-wash: rgba(184, 134, 59, 0.12);
+    --focus: #2a78d6;
+    --good: #0ca30c;
+    --critical: #d03b3b;
+    --warn-wash: rgba(208, 59, 59, 0.1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --ink: #e8ebe4;
+      --ink-soft: #b7bdb0;
+      --muted: #8b9285;
+      --paper: #12161c;
+      --panel: #171c22;
+      --hairline: #2a2f35;
+      --hairline-soft: #232830;
+      --brass: #d6a35f;
+      --brass-ink: #d6a35f;
+      --brass-wash: rgba(214, 163, 95, 0.14);
+      --focus: #6db2ff;
+      --good: #2fd12f;
+      --critical: #ef6262;
+      --warn-wash: rgba(239, 98, 98, 0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; }
+
+  .masthead { border: 1px solid var(--hairline); border-radius: 10px; background: var(--panel); padding: 18px 20px; margin-bottom: 16px; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brass-ink); }
+  .eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--brass); }
+  .masthead h1 { font-size: clamp(1.3rem, 1rem + 1.2vw, 1.8rem); font-weight: 800; margin-top: 8px; }
+  .masthead p { margin: 8px 0 0; color: var(--ink-soft); font-size: 13.5px; }
+
+  section.card { border: 1px solid var(--hairline); border-radius: 10px; background: var(--panel); padding: 18px 20px; margin-bottom: 16px; }
+  section.card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 6px; }
+  section.card .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+
+  .step-badge { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--brass-wash); color: var(--brass-ink); font-weight: 700; font-size: 12px; margin-right: 8px; }
+
+  input[type="file"] {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    border: 1px dashed var(--hairline);
+    border-radius: 8px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+  }
+  input[type="number"] {
+    font: inherit;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--hairline);
+    border-radius: 7px;
+    padding: 9px 10px;
+    width: 160px;
+  }
+  input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  label { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); display: block; margin-bottom: 5px; }
+  .field-row { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px; }
+  textarea {
+    width: 100%;
+    min-height: 110px;
+    font: 12.5px ui-monospace, "SF Mono", monospace;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px;
+    resize: vertical;
+  }
+  button {
+    font: inherit;
+    font-weight: 600;
+    padding: 9px 16px;
+    border-radius: 7px;
+    border: 1px solid var(--hairline);
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  button:hover { background: var(--hairline-soft); }
+
+  .banner { border-radius: 8px; padding: 12px 14px; font-size: 13.5px; margin-top: 12px; line-height: 1.55; }
+  .banner.ok { background: rgba(12, 163, 12, 0.1); border: 1px solid rgba(12, 163, 12, 0.35); }
+  .banner.warn { background: var(--warn-wash); border: 1px solid rgba(208, 59, 59, 0.35); }
+  .banner.info { background: var(--brass-wash); border: 1px solid rgba(184, 134, 59, 0.3); }
+  .banner strong { color: var(--ink); }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; margin: 14px 0; }
+  .stat { background: var(--panel); padding: 12px 14px; }
+  .stat .label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat .value { font-size: 1.3rem; font-weight: 700; margin-top: 4px; }
+
+  .tablewrap { overflow-x: auto; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 13px; }
+  thead th { text-align: right; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); font-weight: 600; padding: 7px 10px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+  thead th:first-child, tbody td:first-child { text-align: left; }
+  tbody td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  .missing { color: var(--critical); font-weight: 600; }
+
+  footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 14px; margin-top: 10px; line-height: 1.6; }
+  code { font-family: ui-monospace, monospace; background: var(--hairline-soft); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+
+  .hidden { display: none !important; }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <span class="eyebrow">Offline &middot; runs entirely in this browser</span>
+    <h1>Freight Empty-Running Tool</h1>
+    <p>Load your trips CSV and a distance matrix below. Nothing is uploaded anywhere - all parsing and computation happens on this device. Currency is ₹ (rupees) throughout.</p>
+  </header>
+
+  <section class="card">
+    <h2><span class="step-badge">1</span>Trips file</h2>
+    <p class="hint">Columns expected: txn_id, date, vehicle_id, origin_id, destination_id, revenue (common header variants like veh/truck, from/to are recognised automatically).</p>
+    <input type="file" id="trips-file" accept=".csv,text/csv" />
+    <div id="detection-banner"></div>
+  </section>
+
+  <section class="card" id="distances-section">
+    <h2><span class="step-badge">2</span>Distance matrix</h2>
+    <p class="hint">Columns: origin_id, destination_id, km. Upload a CSV, or paste/edit rows directly below, then click Apply.</p>
+    <input type="file" id="distances-file" accept=".csv,text/csv" />
+    <div class="field-row" style="margin-top:14px; flex-direction:column;">
+      <label for="distances-text">Paste or edit distance matrix (CSV text)</label>
+      <textarea id="distances-text" placeholder="origin_id,destination_id,km&#10;LOC001,LOC002,120.5"></textarea>
+      <button id="apply-distances-text">Apply pasted matrix</button>
+    </div>
+    <div id="distances-banner"></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step-badge">3</span>Costing assumption</h2>
+    <p class="hint">Both required to compute rupee cost - no defaults are assumed.</p>
+    <div class="field-row">
+      <div>
+        <label for="diesel-price">Diesel price (₹ per litre)</label>
+        <input type="number" id="diesel-price" min="0" step="0.01" placeholder="e.g. 95" />
+      </div>
+      <div>
+        <label for="km-per-litre">Mileage (km per litre)</label>
+        <input type="number" id="km-per-litre" min="0" step="0.01" placeholder="e.g. 4" />
+      </div>
+    </div>
+  </section>
+
+  <section class="card hidden" id="results-section">
+    <h2>Results</h2>
+    <div class="stat-row" id="stat-row"></div>
+    <h3 style="margin-top:18px; font-size:0.92rem;">Per-vehicle empty running</h3>
+    <div class="tablewrap"><table id="vehicle-table"></table></div>
+    <h3 style="margin-top:18px; font-size:0.92rem;">Per-vehicle utilisation (idle days)</h3>
+    <div class="tablewrap"><table id="utilisation-table"></table></div>
+    <div id="missing-banner"></div>
+  </section>
+
+  <footer>
+    This tool mirrors <code>src/routing.py</code>, <code>src/clean.py</code>'s <code>clean_trips</code>, and
+    <code>src/detect.py</code> - the same fixtures in <code>tests/test_routing.py</code> are used to check this
+    page's JavaScript against the Python originals. It only implements the routing/empty-running analysis; cost/margin
+    analysis (when cost columns are detected) isn't computed here - use the Streamlit dashboard or notebook for that.
+  </footer>
+
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Mirrors src/schema.py - keep these two in sync by hand.
+   ============================================================ */
+const COLUMN_ALIASES = {
+  veh: "vehicle_id", truck: "vehicle_id", truck_id: "vehicle_id", truck_no: "vehicle_id",
+  vehicle_no: "vehicle_id", vehicle_number: "vehicle_id",
+  origin: "origin_id", from: "origin_id", from_location: "origin_id", source: "origin_id", start_location: "origin_id",
+  destination: "destination_id", dest: "destination_id", to: "destination_id", to_location: "destination_id", end_location: "destination_id",
+  amount: "revenue", fare: "revenue", freight_amount: "revenue", freight_rate: "revenue",
+  cost: "direct_cost", fuel_cost: "direct_cost", trip_cost: "direct_cost",
+  trip_id: "txn_id", trip_no: "txn_id",
+  customer: "customer_id", client: "customer_id", client_id: "customer_id",
+  distance: "km", distance_km: "km", kms: "km",
+};
+const TRIPS_CANONICAL = ["txn_id", "date", "vehicle_id", "origin_id", "destination_id", "revenue"];
+const LEDGER_CANONICAL_HINTS = ["txn_id", "txn_date", "customer_id", "direct_cost", "invoice_id"];
+const ROUTING_REQUIRED = ["vehicle_id", "origin_id", "destination_id", "date"];
+const ID_COLUMNS = ["txn_id", "vehicle_id", "origin_id", "destination_id"];
+const DATE_FORMATS_NOTE = "%Y-%m-%d, %d-%b-%Y, %d/%m/%Y (day-first), %m/%d/%Y";
+
+/* ============================================================
+   CSV parsing (handles quoted fields)
+   ============================================================ */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  const nonEmpty = rows.filter(r => !(r.length === 1 && r[0] === ""));
+  if (!nonEmpty.length) return { headers: [], records: [] };
+  const headers = nonEmpty[0].map(h => h.trim());
+  const records = nonEmpty.slice(1).map(r => {
+    const rec = {};
+    headers.forEach((h, idx) => { rec[h] = r[idx] !== undefined ? r[idx].trim() : ""; });
+    return rec;
+  });
+  return { headers, records };
+}
+
+/* ============================================================
+   Mirrors src/detect.py's _map_aliases / detect_capabilities
+   ============================================================ */
+function mapAliases(headers) {
+  const canonicalSet = new Set([...TRIPS_CANONICAL, ...LEDGER_CANONICAL_HINTS, "period_month", "amount", "description", "km"]);
+  const mapping = {}, unmapped = [];
+  headers.forEach(h => {
+    const key = h.trim().toLowerCase();
+    if (canonicalSet.has(h)) mapping[h] = h;
+    else if (COLUMN_ALIASES[key]) mapping[h] = COLUMN_ALIASES[key];
+    else unmapped.push(h);
+  });
+  return { mapping, unmapped };
+}
+
+function detectCapabilities(headers, overheadAvailable) {
+  const { mapping, unmapped } = mapAliases(headers);
+  const present = new Set(Object.values(mapping));
+
+  const marginAvailable = present.has("direct_cost") || !!overheadAvailable;
+  const missingForMargin = marginAvailable ? [] : ["direct_cost"];
+  const missingForRouting = ROUTING_REQUIRED.filter(c => !present.has(c));
+  const routingAvailable = missingForRouting.length === 0;
+
+  let message;
+  if (marginAvailable && routingAvailable) {
+    message = "Found cost data and vehicle_id + origin_id + destination_id + date → running both margin and routing analysis.";
+  } else if (routingAvailable) {
+    message = "Found vehicle_id + origin_id + destination_id + date, no cost columns → running empty-running analysis. Margin analysis skipped (no cost data).";
+  } else if (marginAvailable) {
+    message = `Found cost data, missing ${missingForRouting.join(", ")} for routing → margin analysis would run (not implemented in this standalone tool). Routing analysis skipped.`;
+  } else {
+    message = `Cannot analyse: missing required columns for either pipeline. Margin needs: direct_cost (or an overhead file). Routing needs: ${ROUTING_REQUIRED.join(", ")}.`;
+  }
+  if (unmapped.length) message += ` Unmapped columns (left as-is, not used): ${unmapped.join(", ")}.`;
+
+  return { mapping, unmapped, marginAvailable, routingAvailable, missingForMargin, missingForRouting, message };
+}
+
+/* ============================================================
+   Mirrors src/clean.py's DATE_FORMATS / normalise_dates / normalise_ids / clean_trips
+   ============================================================ */
+const MONTH_ABBR = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+function tryDate(year, month, day) {
+  if (month < 1 || month > 12) return null;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > daysInMonth) return null;
+  return Date.UTC(year, month - 1, day); // epoch ms at UTC midnight
+}
+
+function parseFlexibleDate(raw) {
+  if (raw === null || raw === undefined) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+
+  let m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) { const d = tryDate(+m[1], +m[2], +m[3]); if (d !== null) return d; }
+
+  m = text.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (m) {
+    const mon = MONTH_ABBR[m[2].toLowerCase()];
+    if (mon) { const d = tryDate(+m[3], mon, +m[1]); if (d !== null) return d; }
+  }
+
+  m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const a = +m[1], b = +m[2], year = +m[3];
+    // day-first (%d/%m/%Y) tried before month-first (%m/%d/%Y) - same priority as src/clean.py
+    let d = tryDate(year, b, a);
+    if (d !== null) return d;
+    d = tryDate(year, a, b);
+    if (d !== null) return d;
+  }
+  return null;
+}
+
+function normaliseId(value) {
+  if (value === null || value === undefined) return value;
+  return String(value).trim().toUpperCase();
+}
+
+function cleanTrips(records, mapping) {
+  // Rename to canonical columns first (mirrors renaming before src/clean.py sees the frame).
+  const renamed = records.map(rec => {
+    const out = {};
+    for (const [orig, val] of Object.entries(rec)) {
+      const canon = mapping[orig] || orig;
+      out[canon] = val;
+    }
+    return out;
+  });
+
+  const cleaned = renamed.map(rec => {
+    const copy = { ...rec };
+    copy.date = parseFlexibleDate(copy.date);
+    ID_COLUMNS.forEach(col => { if (col in copy) copy[col] = normaliseId(copy[col]); });
+    if (copy.revenue !== undefined) copy.revenue = parseFloat(copy.revenue);
+    return copy;
+  });
+
+  const seen = new Set();
+  const deduped = [];
+  for (const rec of cleaned) {
+    if (seen.has(rec.txn_id)) continue;
+    seen.add(rec.txn_id);
+    deduped.push(rec);
+  }
+  return deduped;
+}
+
+/* ============================================================
+   Mirrors src/routing.py exactly
+   ============================================================ */
+function distanceKey(a, b) { return a + " " + b; }
+
+function buildDistanceMap(distanceRecords) {
+  const map = new Map();
+  distanceRecords.forEach(r => {
+    const o = normaliseId(r.origin_id), d = normaliseId(r.destination_id);
+    const km = parseFloat(r.km);
+    if (o && d && !Number.isNaN(km)) map.set(distanceKey(o, d), km);
+  });
+  return map;
+}
+
+function groupByVehicleSortedByDate(trips) {
+  const groups = new Map();
+  trips.forEach(t => {
+    if (t.date === null) return; // unparseable date - can't be sequenced, excluded like a NaT would sort last/be dropped
+    if (!groups.has(t.vehicle_id)) groups.set(t.vehicle_id, []);
+    groups.get(t.vehicle_id).push(t);
+  });
+  for (const arr of groups.values()) arr.sort((a, b) => a.date - b.date);
+  return groups;
+}
+
+function detectEmptyLegs(trips, distanceMap) {
+  const groups = groupByVehicleSortedByDate(trips);
+  const legs = [];
+  for (const [vehicleId, arr] of groups) {
+    for (let i = 0; i < arr.length - 1; i++) {
+      const cur = arr[i], nxt = arr[i + 1];
+      if (cur.destination_id === nxt.origin_id) continue;
+      const km = distanceMap.get(distanceKey(cur.destination_id, nxt.origin_id));
+      legs.push({
+        vehicle_id: vehicleId,
+        empty_from: cur.destination_id,
+        empty_to: nxt.origin_id,
+        date_gap_days: Math.round((nxt.date - cur.date) / 86400000),
+        empty_km: km === undefined ? null : km,
+        km_missing: km === undefined,
+      });
+    }
+  }
+  return legs;
+}
+
+function summarizeVehicleKm(trips, distanceMap) {
+  const groups = groupByVehicleSortedByDate(trips);
+  const emptyLegs = detectEmptyLegs(trips, distanceMap);
+  const rows = [];
+
+  for (const [vehicleId, arr] of groups) {
+    let loadedKm = 0, loadedMissing = 0;
+    arr.forEach(t => {
+      const km = distanceMap.get(distanceKey(t.origin_id, t.destination_id));
+      if (km === undefined) loadedMissing++; else loadedKm += km;
+    });
+
+    const legsForVehicle = emptyLegs.filter(l => l.vehicle_id === vehicleId);
+    let emptyKm = 0, emptyMissing = 0;
+    legsForVehicle.forEach(l => { if (l.km_missing) emptyMissing++; else emptyKm += l.empty_km; });
+
+    const totalKm = loadedKm + emptyKm;
+    const missingKmLegs = loadedMissing + emptyMissing;
+    rows.push({
+      vehicle_id: vehicleId,
+      loaded_km: loadedKm,
+      empty_km: emptyKm,
+      empty_pct: totalKm > 0 ? emptyKm / totalKm : null,
+      empty_legs: legsForVehicle.length,
+      missing_km_legs: missingKmLegs,
+    });
+  }
+  return rows;
+}
+
+function utilisation(trips) {
+  const groups = groupByVehicleSortedByDate(trips);
+  const rows = [];
+  for (const [vehicleId, arr] of groups) {
+    for (let i = 0; i < arr.length - 1; i++) {
+      rows.push({
+        vehicle_id: vehicleId,
+        date: arr[i].date,
+        idle_days: Math.round((arr[i + 1].date - arr[i].date) / 86400000),
+      });
+    }
+  }
+  return rows;
+}
+
+function utilisationSummary(utilRows) {
+  const byVehicle = new Map();
+  utilRows.forEach(r => {
+    if (!byVehicle.has(r.vehicle_id)) byVehicle.set(r.vehicle_id, []);
+    byVehicle.get(r.vehicle_id).push(r.idle_days);
+  });
+  const rows = [];
+  for (const [vehicleId, days] of byVehicle) {
+    const total = days.reduce((a, b) => a + b, 0);
+    rows.push({ vehicle_id: vehicleId, total_idle_days: total, avg_idle_days: total / days.length, gaps_counted: days.length });
+  }
+  return rows;
+}
+
+function priceEmptyKm(emptyLegs, dieselPricePerLitre, kmPerLitre) {
+  if (!(dieselPricePerLitre > 0) || !(kmPerLitre > 0)) {
+    throw new Error("diesel price and km/litre must both be positive");
+  }
+  return emptyLegs.map(l => ({
+    ...l,
+    empty_cost: l.empty_km === null ? null : (l.empty_km / kmPerLitre) * dieselPricePerLitre,
+  }));
+}
+
+/* ============================================================
+   UI wiring
+   ============================================================ */
+let tripsRecords = null;
+let tripsMapping = null;
+let cleanedTrips = null;
+let distanceRecords = null;
+
+const fmtInt = n => n.toLocaleString();
+const fmtKm = n => (n === null || n === undefined || Number.isNaN(n)) ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: 1 }) + " km";
+const fmtPct = n => (n === null || n === undefined) ? "—" : (n * 100).toFixed(1) + "%";
+const fmtRupees = n => (n === null || n === undefined || Number.isNaN(n)) ? "—" : "₹" + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+function el(tag, attrs, text) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function renderBanner(containerId, kind, html) {
+  const c = document.getElementById(containerId);
+  c.innerHTML = "";
+  const div = el("div", { class: "banner " + kind });
+  div.innerHTML = html;
+  c.appendChild(div);
+}
+
+function renderTable(tableId, columns, rows) {
+  const table = document.getElementById(tableId);
+  table.innerHTML = "";
+  const thead = el("thead");
+  const htr = el("tr");
+  columns.forEach(c => htr.appendChild(el("th", null, c.header)));
+  thead.appendChild(htr);
+  const tbody = el("tbody");
+  rows.forEach(row => {
+    const tr = el("tr");
+    columns.forEach(c => {
+      const td = el("td");
+      td.className = c.mono === false ? "" : "mono";
+      const text = c.render(row);
+      td.textContent = text;
+      if (c.highlightMissing && row.missing_km_legs > 0) td.classList.add("missing");
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+}
+
+function tryComputeAndRender() {
+  if (!cleanedTrips) return;
+  const resultsSection = document.getElementById("results-section");
+
+  if (!distanceRecords || !distanceRecords.length) {
+    resultsSection.classList.add("hidden");
+    return;
+  }
+  resultsSection.classList.remove("hidden");
+
+  const distanceMap = buildDistanceMap(distanceRecords);
+  const emptyLegs = detectEmptyLegs(cleanedTrips, distanceMap);
+  const vehicleSummary = summarizeVehicleKm(cleanedTrips, distanceMap).sort((a, b) => (b.empty_pct || 0) - (a.empty_pct || 0));
+  const utilRows = utilisation(cleanedTrips);
+  const utilSummary = utilisationSummary(utilRows);
+
+  const dieselPrice = parseFloat(document.getElementById("diesel-price").value);
+  const kmPerLitre = parseFloat(document.getElementById("km-per-litre").value);
+  const canPrice = dieselPrice > 0 && kmPerLitre > 0;
+  const priced = canPrice ? priceEmptyKm(emptyLegs, dieselPrice, kmPerLitre) : null;
+
+  const totalEmptyKm = vehicleSummary.reduce((a, r) => a + r.empty_km, 0);
+  const totalMissingLegs = vehicleSummary.reduce((a, r) => a + r.missing_km_legs, 0);
+  const totalCost = priced ? priced.reduce((a, l) => a + (l.empty_cost || 0), 0) : null;
+  const pricedLegCount = priced ? priced.filter(l => l.empty_cost !== null).length : 0;
+
+  const missingNote = totalMissingLegs > 0 ? `excludes ${totalMissingLegs} leg(s) with no distance` : null;
+
+  const statRow = document.getElementById("stat-row");
+  statRow.innerHTML = "";
+  const stats = [
+    { label: "Vehicles", value: fmtInt(vehicleSummary.length) },
+    { label: "Empty legs", value: fmtInt(emptyLegs.length) },
+    { label: "Total empty km", value: fmtKm(totalEmptyKm), sub: missingNote },
+    {
+      label: "Total empty cost",
+      value: canPrice ? fmtRupees(totalCost) : "set rate + mileage above",
+      sub: canPrice ? (missingNote || `${pricedLegCount} leg(s) priced`) : null,
+    },
+  ];
+  stats.forEach(s => {
+    const div = el("div", { class: "stat" });
+    div.appendChild(el("div", { class: "label" }, s.label));
+    div.appendChild(el("div", { class: "value" }, s.value));
+    if (s.sub) {
+      const sub = el("div", { class: "label" }, s.sub);
+      sub.style.marginTop = "3px";
+      sub.style.textTransform = "none";
+      sub.style.fontWeight = "500";
+      div.appendChild(sub);
+    }
+    statRow.appendChild(div);
+  });
+
+  renderTable("vehicle-table", [
+    { header: "Vehicle", render: r => r.vehicle_id, mono: false },
+    { header: "Loaded km", render: r => fmtKm(r.loaded_km) },
+    { header: "Empty km", render: r => fmtKm(r.empty_km) },
+    { header: "Empty %", render: r => fmtPct(r.empty_pct) },
+    { header: "Empty legs", render: r => fmtInt(r.empty_legs) },
+    { header: "Missing km legs", render: r => fmtInt(r.missing_km_legs), highlightMissing: true },
+  ], vehicleSummary);
+
+  renderTable("utilisation-table", [
+    { header: "Vehicle", render: r => r.vehicle_id, mono: false },
+    { header: "Total idle days", render: r => fmtInt(r.total_idle_days) },
+    { header: "Avg idle days", render: r => r.avg_idle_days.toFixed(1) },
+    { header: "Gaps counted", render: r => fmtInt(r.gaps_counted) },
+  ], utilSummary);
+
+  const missingBanner = document.getElementById("missing-banner");
+  missingBanner.innerHTML = "";
+  if (totalMissingLegs > 0) {
+    const div = el("div", { class: "banner warn" });
+    div.innerHTML = `<strong>${totalMissingLegs} leg(s)</strong> have no matching origin/destination pair in the distance matrix - their km is excluded from every total above, not zeroed. Add those pairs to the matrix to include them.`;
+    missingBanner.appendChild(div);
+  }
+}
+
+document.getElementById("trips-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const { headers, records } = parseCSV(reader.result);
+    tripsRecords = records;
+
+    const detection = detectCapabilities(headers, distanceRecords !== null && distanceRecords.length > 0);
+    tripsMapping = detection.mapping;
+
+    let kind = "info";
+    if (detection.routingAvailable) kind = "ok";
+    else if (!detection.marginAvailable && !detection.routingAvailable) kind = "warn";
+    renderBanner("detection-banner", kind, `<strong>Detected:</strong> ${detection.message}`);
+
+    if (detection.routingAvailable) {
+      cleanedTrips = cleanTrips(tripsRecords, tripsMapping);
+      tryComputeAndRender();
+    } else {
+      cleanedTrips = null;
+      document.getElementById("results-section").classList.add("hidden");
+    }
+  };
+  reader.readAsText(file);
+});
+
+function loadDistanceRecords(records) {
+  distanceRecords = records;
+  const distanceMapPreview = buildDistanceMap(records);
+  renderBanner("distances-banner", "ok", `<strong>${records.length}</strong> distance rows loaded (${distanceMapPreview.size} valid origin/destination pairs).`);
+  tryComputeAndRender();
+}
+
+document.getElementById("distances-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const { records } = parseCSV(reader.result);
+    document.getElementById("distances-text").value = reader.result.trim();
+    loadDistanceRecords(records);
+  };
+  reader.readAsText(file);
+});
+
+document.getElementById("apply-distances-text").addEventListener("click", () => {
+  const text = document.getElementById("distances-text").value;
+  if (!text.trim()) return;
+  const { records } = parseCSV(text);
+  loadDistanceRecords(records);
+});
+
+["diesel-price", "km-per-litre"].forEach(id => {
+  document.getElementById(id).addEventListener("input", tryComputeAndRender);
+});
+</script>

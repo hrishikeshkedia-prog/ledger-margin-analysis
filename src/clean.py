@@ -164,6 +164,16 @@ def flag_customer_name_variants(
     distinct customers.
     """
     df = df.copy()
+    if schema.CUSTOMER_ID not in df.columns:
+        log.append(
+            DecisionLogEntry(
+                step="flag_customer_name_variants",
+                rows_affected=0,
+                rule=f"skipped - no {schema.CUSTOMER_ID} column present",
+            )
+        )
+        return df
+
     unique_ids = sorted(df[schema.CUSTOMER_ID].dropna().unique())
     flagged_pairs = []
     for i, a in enumerate(unique_ids):

@@ -186,6 +186,55 @@ DISTANCE_SCHEMA = Schema(
     ),
 )
 
+# --- Column name aliases -----------------------------------------------------
+# Maps a lowercased, whitespace-stripped real-world header to its
+# canonical column constant above. src/detect.py uses this to recognize
+# common variants (a different freight operator's export won't use our
+# exact header names) without ever guessing a column's meaning from its
+# data - an unrecognized header is reported as unmapped, never silently
+# dropped or matched by a fuzzy guess.
+COLUMN_ALIASES: dict[str, str] = {
+    # vehicle_id
+    "veh": VEHICLE_ID,
+    "truck": VEHICLE_ID,
+    "truck_id": VEHICLE_ID,
+    "truck_no": VEHICLE_ID,
+    "vehicle_no": VEHICLE_ID,
+    "vehicle_number": VEHICLE_ID,
+    # origin_id
+    "origin": ORIGIN_ID,
+    "from": ORIGIN_ID,
+    "from_location": ORIGIN_ID,
+    "source": ORIGIN_ID,
+    "start_location": ORIGIN_ID,
+    # destination_id
+    "destination": DESTINATION_ID,
+    "dest": DESTINATION_ID,
+    "to": DESTINATION_ID,
+    "to_location": DESTINATION_ID,
+    "end_location": DESTINATION_ID,
+    # revenue
+    "amount": REVENUE,
+    "fare": REVENUE,
+    "freight_amount": REVENUE,
+    "freight_rate": REVENUE,
+    # direct_cost
+    "cost": DIRECT_COST,
+    "fuel_cost": DIRECT_COST,
+    "trip_cost": DIRECT_COST,
+    # txn_id / trip id
+    "trip_id": TXN_ID,
+    "trip_no": TXN_ID,
+    # customer_id
+    "customer": CUSTOMER_ID,
+    "client": CUSTOMER_ID,
+    "client_id": CUSTOMER_ID,
+    # km
+    "distance": DISTANCE_KM,
+    "distance_km": DISTANCE_KM,
+    "kms": DISTANCE_KM,
+}
+
 # Backwards-compatible flat aliases for the ledger schema, since it is the
 # schema most other modules validate against by default.
 ALL_COLUMNS = LEDGER_SCHEMA.all_columns

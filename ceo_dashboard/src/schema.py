@@ -76,6 +76,18 @@ INV_END = "ending_inventory"
 INVENTORY_SCHEMA = [INV_SKU_ID, INV_MONTH, INV_BEGIN, INV_RECEIVED, INV_SOLD, INV_END]
 
 # ---------------------------------------------------------------------------
+# Operating expenses table (expense category x month grain)
+# ---------------------------------------------------------------------------
+# Added in Stage 2 to support the Universal Core "operating expense
+# breakdown" KPI, which needs overhead cost data that order-level rows can
+# never contain (rent, salaries, tools are not a property of any one order).
+OPEX_MONTH = "month"
+OPEX_CATEGORY = "expense_category"
+OPEX_AMOUNT = "amount"
+
+OPEX_SCHEMA = [OPEX_MONTH, OPEX_CATEGORY, OPEX_AMOUNT]
+
+# ---------------------------------------------------------------------------
 # Default column mappings (identity mapping: raw header -> canonical name)
 # ---------------------------------------------------------------------------
 # data_loader.py renames incoming columns using dicts like these. To plug in
@@ -85,6 +97,7 @@ INVENTORY_SCHEMA = [INV_SKU_ID, INV_MONTH, INV_BEGIN, INV_RECEIVED, INV_SOLD, IN
 DEFAULT_ORDERS_MAPPING = {col: col for col in ORDERS_SCHEMA}
 DEFAULT_MARKETING_MAPPING = {col: col for col in MARKETING_SCHEMA}
 DEFAULT_INVENTORY_MAPPING = {col: col for col in INVENTORY_SCHEMA}
+DEFAULT_OPEX_MAPPING = {col: col for col in OPEX_SCHEMA}
 
 
 def validate_columns(df, expected_columns, table_name):

@@ -28,10 +28,13 @@ data generator, not sourced from any real business. See
 ```
 ceo_dashboard/
   src/
-    schema.py            canonical column names for all three raw tables
+    schema.py            canonical column names for all four raw tables
     data_generator.py    synthetic D2C fashion dataset generator (seeded)
     data_loader.py        swappable loader: column-mapping dict -> canonical schema
-  data/synthetic/         generated CSVs (orders, marketing_spend, inventory_snapshots)
+    raw_noise.py          injects realistic messiness, for demonstrating clean.py
+    clean.py               logged cleaning pipeline (never silently imputes/drops)
+    core.py                 Universal Core KPI engine (Layer 1, industry-agnostic)
+  data/synthetic/         generated CSVs (orders, marketing_spend, inventory_snapshots, opex)
   notebooks/
     ceo_dashboard.ipynb   the deliverable notebook, built in stages
     build_notebook.py     builds the notebook programmatically with nbformat
@@ -40,15 +43,17 @@ ceo_dashboard/
 
 ## Data model
 
-Three tables, not one flat spreadsheet — this mirrors how the data actually
+Four tables, not one flat spreadsheet — this mirrors how the data actually
 arrives in a real business (order export, ad-platform report, warehouse
-export) and avoids double-counting spend across multi-item orders:
+export, expense ledger) and avoids double-counting spend across multi-item
+orders:
 
 | Table | Grain | Contents |
 |---|---|---|
 | `orders` | order line item | SKU, category, size, quantity, price, COGS, shipping, payment fee, marketing-channel attribution, return flag/date, customer ID |
 | `marketing_spend` | (month, channel) | total spend per channel per month |
 | `inventory_snapshots` | (SKU, month) | opening/closing stock, units received, units sold |
+| `opex` | (month, expense category) | operating expenses (salaries, rent, tools, warehousing, misc) not tied to any single order |
 
 Full column definitions live in `src/schema.py` and are documented in
 Stage 1 of the notebook.

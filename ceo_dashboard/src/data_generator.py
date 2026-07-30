@@ -353,9 +353,41 @@ def generate_inventory_snapshots(rng: np.random.Generator, sku_catalog: pd.DataF
     return pd.DataFrame(rows).sort_values([schema.INV_SKU_ID, schema.INV_MONTH]).reset_index(drop=True)
 
 
+# Monthly overhead: base amount + slow growth (headcount/rent creep) + small
+# noise. This is the "cost pool" that doesn't attach to any single order --
+# it funds the business existing, not any one sale.
+OPEX_CATEGORY_SPECS = {
+    "Salaries & Team":     {"base": 480000, "monthly_growth": 6000, "noise_pct": 0.03},
+    "Rent & Utilities":    {"base": 150000, "monthly_growth": 1500, "noise_pct": 0.02},
+    "Software & Tools":    {"base": 60000, "monthly_growth": 800, "noise_pct": 0.05},
+    "Warehousing & Ops":   {"base": 110000, "monthly_growth": 2000, "noise_pct": 0.06},
+    "Professional & Misc": {"base": 45000, "monthly_growth": 500, "noise_pct": 0.15},
+}
+
+
+def generate_opex(rng: np.random.Generator) -> pd.DataFrame:
+    """Monthly operating expenses by category -- overhead that funds the
+    business existing (salaries, rent, tools) rather than any single order.
+    Grows slowly month over month (a growing team/footprint) with small
+    category-specific noise.
+    """
+    months = pd.period_range(START_DATE, END_DATE, freq="M").astype(str)
+    rows = []
+    for category, spec in OPEX_CATEGORY_SPECS.items():
+        for m_idx, month in enumerate(months):
+            amount = spec["base"] + spec["monthly_growth"] * m_idx
+            amount *= 1 + rng.normal(0, spec["noise_pct"])
+            rows.append({
+                schema.OPEX_MONTH: month,
+                schema.OPEX_CATEGORY: category,
+                schema.OPEX_AMOUNT: round(max(amount, 0), 2),
+            })
+    return pd.DataFrame(rows).sort_values([schema.OPEX_MONTH, schema.OPEX_CATEGORY]).reset_index(drop=True)
+
+
 def generate_all(seed: int = 42, n_customers_target: int = 5500) -> dict[str, pd.DataFrame]:
     """Generate the full synthetic dataset. Returns a dict of DataFrames:
-    {'orders', 'marketing_spend', 'inventory_snapshots'}.
+    {'orders', 'marketing_spend', 'inventory_snapshots', 'opex'}.
 
     *** SYNTHETIC DATA *** -- see module docstring for generation assumptions.
     """
@@ -364,16 +396,19 @@ def generate_all(seed: int = 42, n_customers_target: int = 5500) -> dict[str, pd
     orders_df = generate_orders(rng, sku_catalog, n_customers_target=n_customers_target)
     marketing_df = generate_marketing_spend(rng, orders_df)
     inventory_df = generate_inventory_snapshots(rng, sku_catalog, orders_df)
+    opex_df = generate_opex(rng)
 
     orders_df = orders_df.drop(columns=[c for c in orders_df.columns if c not in schema.ORDERS_SCHEMA])
     schema.validate_columns(orders_df, schema.ORDERS_SCHEMA, "orders")
     schema.validate_columns(marketing_df, schema.MARKETING_SCHEMA, "marketing_spend")
     schema.validate_columns(inventory_df, schema.INVENTORY_SCHEMA, "inventory_snapshots")
+    schema.validate_columns(opex_df, schema.OPEX_SCHEMA, "opex")
 
     return {
         "orders": orders_df,
         "marketing_spend": marketing_df,
         "inventory_snapshots": inventory_df,
+        "opex": opex_df,
     }
 
 

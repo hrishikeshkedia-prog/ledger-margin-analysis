@@ -14,13 +14,14 @@ def generated():
 
 
 def test_tables_present(generated):
-    assert set(generated.keys()) == {"orders", "marketing_spend", "inventory_snapshots"}
+    assert set(generated.keys()) == {"orders", "marketing_spend", "inventory_snapshots", "opex"}
 
 
 def test_schema_columns(generated):
     assert list(generated["orders"].columns) == schema.ORDERS_SCHEMA
     assert list(generated["marketing_spend"].columns) == schema.MARKETING_SCHEMA
     assert list(generated["inventory_snapshots"].columns) == schema.INVENTORY_SCHEMA
+    assert list(generated["opex"].columns) == schema.OPEX_SCHEMA
 
 
 def test_reproducible_with_same_seed():

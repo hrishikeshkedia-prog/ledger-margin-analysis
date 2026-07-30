@@ -31,6 +31,7 @@ DATE_COLUMNS_BY_TABLE = {
     "orders": [schema.ORDER_DATE, schema.RETURN_DATE],
     "marketing_spend": [],
     "inventory_snapshots": [],
+    "opex": [],
 }
 
 
@@ -64,12 +65,17 @@ def load_inventory_snapshots(path: str, mapping: dict | None = None) -> pd.DataF
     return _load_and_map(path, mapping, schema.INVENTORY_SCHEMA, "inventory_snapshots")
 
 
+def load_opex(path: str, mapping: dict | None = None) -> pd.DataFrame:
+    mapping = mapping or schema.DEFAULT_OPEX_MAPPING
+    return _load_and_map(path, mapping, schema.OPEX_SCHEMA, "opex")
+
+
 def load_all(data_dir: str = "data/synthetic", mappings: dict | None = None) -> dict[str, pd.DataFrame]:
-    """Load all three tables from a directory of CSVs named
-    orders.csv / marketing_spend.csv / inventory_snapshots.csv.
+    """Load all four tables from a directory of CSVs named
+    orders.csv / marketing_spend.csv / inventory_snapshots.csv / opex.csv.
 
     `mappings`, if given, is a dict like
-    {"orders": {...}, "marketing_spend": {...}, "inventory_snapshots": {...}}
+    {"orders": {...}, "marketing_spend": {...}, "inventory_snapshots": {...}, "opex": {...}}
     letting the caller override any subset of the default (identity)
     mappings -- e.g. when only the orders export has different headers.
     """
@@ -83,4 +89,5 @@ def load_all(data_dir: str = "data/synthetic", mappings: dict | None = None) -> 
                                                   mappings.get("marketing_spend")),
         "inventory_snapshots": load_inventory_snapshots(os.path.join(data_dir, "inventory_snapshots.csv"),
                                                           mappings.get("inventory_snapshots")),
+        "opex": load_opex(os.path.join(data_dir, "opex.csv"), mappings.get("opex")),
     }

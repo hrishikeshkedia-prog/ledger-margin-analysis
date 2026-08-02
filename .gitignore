@@ -9,3 +9,8 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+
+# graphify: machine-local interpreter path / extraction cache, not portable
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cache/

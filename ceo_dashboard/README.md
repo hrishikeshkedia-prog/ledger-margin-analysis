@@ -12,16 +12,25 @@ data generator, not sourced from any real business. See
 
 ## Two-layer architecture
 
-- **Layer 1 — Universal Core** (`src/`): revenue trend, gross margin %,
-  contribution margin, COGS/opex breakdown, inventory turns, days of
+- **Layer 1 — Universal Core** (`src/core.py`): revenue trend, gross margin
+  %, contribution margin (plus a returns-margin bridge), COGS/opex
+  breakdown, a monthly operating-profit P&L, inventory turns, days of
   inventory outstanding, working-capital cycle (DSO/DPO/DIO/CCC), SKU
-  concentration, margin-by-SKU. Works for any goods business.
-- **Layer 2 — Fashion Module**: returns rate, CAC, ROAS/MER, LTV:CAC, AOV,
-  repeat-purchase rate, cohort retention, sell-through rate, weeks-of-cover,
-  markdown/dead-stock %. Industry-specific KPI *definitions* live in
-  `src/fashion_config.py`, separate from the calculation engine — swapping
-  to another industry (FMCG, auto parts) means writing a new config file,
-  not editing the engine.
+  concentration, margin-by-SKU. Works for any goods business -- nothing in
+  this file knows what "fashion" means.
+- **Layer 2 — Fashion Module** (`src/fashion.py`, built ON TOP of
+  `core.py`): returns rate (units/value, by category and SKU), true CAC by
+  channel, ROAS/MER, LTV:CAC ratio, AOV, repeat-purchase rate, cohort
+  retention, sell-through rate, weeks-of-cover, markdown %, dead-stock %.
+  Every business judgment call (LTV lifetime assumption, high-return
+  threshold, dead-stock bar, weeks-of-cover bands) lives in
+  `src/fashion_config.py` as plain data, never hardcoded in `fashion.py`.
+  Porting to another industry (FMCG, auto parts) means writing a new
+  config file and pointing `fashion.py` at it -- `core.py` and `fashion.py`
+  are never edited. Proven live in the notebook: the same functions rerun
+  against `CONSERVATIVE_FASHION_CONFIG` (a stricter analyst's judgment call
+  on the same data) produce genuinely different numbers with zero code
+  changes.
 
 ## Project layout
 
@@ -34,6 +43,8 @@ ceo_dashboard/
     raw_noise.py          injects realistic messiness, for demonstrating clean.py
     clean.py               logged cleaning pipeline (never silently imputes/drops)
     core.py                 Universal Core KPI engine (Layer 1, industry-agnostic)
+    fashion_config.py       Layer 2 config: every fashion-specific threshold/assumption
+    fashion.py               D2C Fashion module (Layer 2), built on core.py, config-driven
   data/synthetic/         generated CSVs (orders, marketing_spend, inventory_snapshots, opex)
   notebooks/
     ceo_dashboard.ipynb   the deliverable notebook, built in stages
@@ -50,13 +61,35 @@ orders:
 
 | Table | Grain | Contents |
 |---|---|---|
-| `orders` | order line item | SKU, category, size, quantity, price, COGS, shipping, payment fee, marketing-channel attribution, return flag/date, customer ID |
+| `orders` | order line item | SKU, category, size, quantity, price, list price, COGS, shipping, payment fee, marketing-channel attribution, return flag/date, customer ID |
 | `marketing_spend` | (month, channel) | total spend per channel per month |
 | `inventory_snapshots` | (SKU, month) | opening/closing stock, units received, units sold |
 | `opex` | (month, expense category) | operating expenses (salaries, rent, tools, warehousing, misc) not tied to any single order |
 
 Full column definitions live in `src/schema.py` and are documented in
-Stage 1 of the notebook.
+Stage 1 of the notebook. `list_price` (Stage 3) is purely additive --
+every column present since Stage 1 is unchanged.
+
+## Data realism / calibration
+
+The generator (`src/data_generator.py`) is deliberately calibrated, not
+just randomly plausible, so downstream KPIs and models have real signal to
+find:
+
+- **SKU demand is Pareto-distributed** (a head of best-sellers, a long
+  tail of slow/dead SKUs), with an explicit slow-mover subset guaranteeing
+  genuine dead-stock candidates.
+- **~7% of SKUs are structurally weak** ("problem SKUs": elevated return
+  rate + elevated COGS), and **one marketing channel (Influencer) is
+  calibrated genuinely inefficient** -- both land at negative contribution
+  margin after CAC, which a margin-risk alert model needs to exist at all.
+- **Repeat-customer selection is recency-weighted**, so cohort retention
+  genuinely decays by cohort age instead of sitting flat.
+
+These were not the initial design -- a Stage 2/3 diagnostic caught a
+uniform-demand, uniformly-healthy-margin, flat-retention first pass and
+the generator was recalibrated in response (see `data_generator.py`'s
+module docstring for the full rationale and parameters).
 
 ## Swappable data loading
 

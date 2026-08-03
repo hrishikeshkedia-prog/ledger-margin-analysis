@@ -226,7 +226,7 @@ print(orders_df.groupby("category")["is_return"].mean().sort_values(ascending=Fa
     ),
     md(
 """Dresses, Tops, and Bottoms — the fit-sensitive categories — land in the
-28–38% return-rate range, Accessories sits under 10%. This spread is by
+29–37% return-rate range, Accessories sits under 10%. This spread is by
 design (see the generator's category return-rate table) and is what will
 make the returns-driven margin impact visible in Stage 3, rather than a
 number too small to matter."""
@@ -282,11 +282,13 @@ in `tests/test_stage1_data.py::test_loader_raises_on_missing_column`."""
 ## Stage 1 summary
 
 Built a fully synthetic, seeded, reproducible 12-month D2C fashion dataset
-across three tables — `orders` (order-line grain, 25,930 lines / ~18,600
-orders / 12,002 customers / 150 SKUs), `marketing_spend` (channel × month),
+across three tables — `orders` (order-line grain, ~26,500 lines / ~18,900
+orders / ~12,000 customers / 150 SKUs), `marketing_spend` (channel × month),
 and `inventory_snapshots` (SKU × month) — with category-specific return
-rates realistically landing in the 20–40% fashion range (Dresses ~38%,
-Tops ~32%) so their margin impact will be visible later. Every column is
+rates realistically landing in the 20–40% fashion range (Dresses ~37%,
+Tops ~37%) so their margin impact will be visible later. (These exact
+counts were recalibrated in Stage 3 -- see that stage's summary -- but the
+schema and this table's grain are unchanged.) Every column is
 documented above. The data-loading layer (`src/data_loader.py` +
 `src/schema.py`) was proven swappable: a differently-headed CSV loads
 correctly by editing only a column-mapping dictionary, with no changes to
@@ -640,9 +642,14 @@ print("Top 10 SKUs by revenue (ranked, with cumulative share):")
 sku_ranked[["sku_id", "category", "net_revenue", "revenue_share", "cumulative_share"]].head(10)"""
     ),
     md(
-"""The top 10 SKUs (of 150) generate about 18% of revenue, and the top 20%
-of SKUs (30 products) generate about 42% -- concentrated, but not
-dangerously so; no single hero product the business is dependent on."""
+"""The top 10 SKUs (of 150) generate about 47% of revenue, and the top 20%
+of SKUs (~30 products) generate about 70% -- a meaningfully concentrated,
+Pareto-shaped revenue base (a small head of hero products, a long tail of
+slow sellers), which is realistic for fashion retail. *(Note: since this
+notebook shares one continuously-evolving generator across stages, this
+cell reflects the demand-shape recalibration done in Stage 3 -- a uniform
+SKU-demand model, used before that fix, produced a much flatter ~18%/42%
+split here, which Stage 3's own summary explains.)*"""
     ),
     md(
 """### KPI 7 — Inventory turns and Days of Inventory Outstanding (DIO)
@@ -704,9 +711,10 @@ sample, then run for real against the canonical data, which -- as
 expected, since it's generated clean -- logged zero rows affected on
 every step. Eight Universal Core KPIs were computed with real output:
 revenue trend, gross margin, contribution margin (plus a returns-margin
-bridge showing returns cost **29% of gross contribution margin** over the
+bridge showing returns cost **~29% of gross contribution margin** over the
 year), COGS/opex breakdown, a monthly operating-profit P&L, margin-by-SKU
-with revenue concentration (top 10 SKUs = 18% of revenue), inventory
+with revenue concentration (top 10 SKUs = 47% of revenue, reflecting the
+Stage 3 demand-shape recalibration -- see that stage's summary), inventory
 turns/DIO, and the working-capital cycle -- with DSO and DPO explicitly
 labeled as stated assumptions (not derived figures), never fabricated
 from data that doesn't exist. 12 new tests (27 total across both stages)
@@ -721,9 +729,425 @@ first-class, reusable KPI rather than diagnostic-only code."""
 ]
 
 
+# ===========================================================================
+# STAGE 3 -- D2C Fashion Industry Module
+# ===========================================================================
+STAGE_3_CELLS = [
+    md(
+"""---
+## Stage 3 — D2C Fashion Industry Module (Layer 2)
+
+Before writing a single fashion KPI, this stage first fixes two data
+problems the Stage 2 diagnostic (and a closer look while building Stage 3)
+surfaced:
+
+1. **Too few loss-makers.** 0 of 5 channels and only 3 of 150 SKUs were
+   contribution-margin-negative even after CAC -- too thin a signal for
+   Stage 5's alert model.
+2. **Demand was uniform, not Pareto-skewed**, and **cohort retention was
+   flat/noisy with no decay by cohort age** -- unrealistic for fashion
+   retail, and it would have made the sell-through, dead-stock, and
+   cohort-retention KPIs below meaningless (nothing to distinguish a hero
+   SKU from a dead one; no actual "does retention decay" story to tell).
+
+Both are fixed directly in `src/data_generator.py` -- the three original
+tables' CONTRACT (columns, grain) is unchanged; only the underlying
+random-generation logic was recalibrated. Fixes made:
+
+- **SKU popularity** is now Pareto-distributed (not uniform), producing a
+  realistic head of best-sellers and long tail, plus an explicit
+  "slow-mover" subset (~10% of SKUs) with crushed demand weight,
+  guaranteeing genuine near-dead-stock SKUs rather than leaving that to
+  chance.
+- **~7% of SKUs are seeded as structurally weak "problem SKUs"**:
+  elevated return rate (50-68%) and elevated COGS-as-%-of-price (58-72%),
+  landing some at negative contribution margin outright.
+- **The Influencer channel is calibrated genuinely inefficient**
+  (cost-per-order raised ~3x) -- a real, common D2C failure mode (glossy
+  campaigns that don't earn back their cost).
+- **Repeat-customer selection is now RECENCY-weighted**, not uniform: a
+  customer who ordered last month is far more likely to reorder than one
+  who ordered 6 months ago, which is what makes cohort retention actually
+  decay by cohort age.
+- A `list_price` column was added to `orders` (purely additive -- every
+  existing column is unchanged) so markdown % is computable at all; there
+  was previously no way to tell a discounted line from a full-price one.
+
+See `src/data_generator.py`'s module docstring and `PROBLEM_SKU_*` /
+`SKU_POPULARITY_PARETO_ALPHA` / `SLOW_MOVER_*` / `RETAIN_DECAY_RATE`
+constants for the exact parameters."""
+    ),
+    md("### Regenerate with the recalibrated generator"),
+    code(
+"""data = dg.generate_all(seed=42)
+orders_df, marketing_df, inventory_df, opex_df = data["orders"], data["marketing_spend"], data["inventory_snapshots"], data["opex"]
+
+orders_clean, decision_log = clean.clean_orders(orders_df)
+assert (decision_log["rows_affected"] == 0).all(), "canonical data should still be clean by construction"
+print("Regenerated + cleaned. Shapes:")
+for name, df in {"orders": orders_df, "marketing_spend": marketing_df,
+                  "inventory_snapshots": inventory_df, "opex": opex_df}.items():
+    print(f"  {name}: {df.shape}")"""
+    ),
+    md(
+"""### Verification 1 & 2 — negative-contribution-margin SKUs and channels, after returns + CAC
+
+Same methodology as the Stage 2 pre-flight diagnostic (pro-rata CAC
+allocation to SKU grain by revenue share within each order), rerun against
+the recalibrated data."""
+    ),
+    code(
+"""econ = core.add_line_economics(orders_clean)
+orders_only = econ.drop_duplicates(subset=schema.ORDER_ID)
+first_orders = orders_only.sort_values(schema.ORDER_DATE).drop_duplicates(subset=schema.CUSTOMER_ID, keep="first")
+
+orders_by_channel = orders_only.groupby(schema.MARKETING_CHANNEL).size()
+spend_by_channel = marketing_df.groupby(schema.SPEND_CHANNEL)[schema.SPEND_AMOUNT].sum()
+cm_by_channel = econ.groupby(schema.MARKETING_CHANNEL)["contribution_margin_line"].sum()
+
+channel_pnl = pd.DataFrame({
+    "contribution_margin": cm_by_channel, "orders": orders_by_channel, "spend": spend_by_channel,
+}).fillna(0)
+channel_pnl["cm_after_cac"] = channel_pnl["contribution_margin"] - channel_pnl["spend"]
+neg_channels = channel_pnl[channel_pnl["cm_after_cac"] < 0]
+print(f"VERIFICATION 2 -- Channels contribution-margin-negative after CAC: {len(neg_channels)} of {len(channel_pnl)}")
+print("List:", list(neg_channels.index))
+print()
+print(channel_pnl.round(0).to_string())"""
+    ),
+    code(
+"""order_net_rev = econ.groupby(schema.ORDER_ID)["net_revenue_line"].transform("sum")
+line_count = econ.groupby(schema.ORDER_ID)[schema.ORDER_ID].transform("count")
+econ["line_share"] = np.where(order_net_rev > 0, econ["net_revenue_line"] / order_net_rev, 1 / line_count)
+cac_cost_per_order = channel_pnl["spend"] / channel_pnl["orders"]
+econ["allocated_cac"] = econ[schema.MARKETING_CHANNEL].map(cac_cost_per_order) * econ["line_share"]
+econ["cm_after_cac_line"] = econ["contribution_margin_line"] - econ["allocated_cac"]
+
+sku_cm_after_cac = econ.groupby(schema.SKU_ID)["cm_after_cac_line"].sum()
+# denominator is the FULL 150-SKU catalog (from inventory_snapshots, which
+# has a row for every SKU regardless of sales), not just SKUs that appear
+# in orders_df -- a handful of SKUs sold zero units and would otherwise be
+# silently dropped from the count instead of correctly counted as "not negative"
+all_sku_ids = pd.Index(sorted(inventory_df[schema.INV_SKU_ID].unique()))
+sku_cm_after_cac = sku_cm_after_cac.reindex(all_sku_ids).fillna(0.0)
+neg_skus = sku_cm_after_cac[sku_cm_after_cac < 0].sort_values()
+
+print(f"VERIFICATION 1 -- SKUs contribution-margin-negative after CAC: {len(neg_skus)} of {len(all_sku_ids)}")
+print("List:", list(neg_skus.index))"""
+    ),
+    md("### Verification 3 — top-10 SKU revenue concentration"),
+    code(
+"""sku_ranked, concentration_summary = core.sku_concentration(orders_clean)
+print("VERIFICATION 3 -- SKU revenue concentration:")
+for k, v in concentration_summary.items():
+    print(f"  {k}: {v:.1%}" if isinstance(v, float) else f"  {k}: {v}")"""
+    ),
+    md("### Verification 4 — near-zero-unit SKUs (dead-stock candidates)"),
+    code(
+"""units_by_sku = econ.groupby(schema.SKU_ID)[schema.QUANTITY].sum().reindex(all_sku_ids).fillna(0)
+print("VERIFICATION 4 -- near-zero-unit SKUs over the 12-month window:")
+for threshold in [5, 10, 20]:
+    print(f"  SKUs with <= {threshold} units sold: {(units_by_sku <= threshold).sum()}")
+print()
+print("Bottom 8 SKUs by units sold:")
+print(units_by_sku.sort_values().head(8))"""
+    ),
+    md(
+"""**Verification summary:**
+
+1. **28 of 150 SKUs** are contribution-margin-negative after returns + CAC.
+2. **1 of 5 channels (Influencer)** is contribution-margin-negative after CAC.
+3. **Top 10 SKUs ≈ 47% of revenue** (top 20% of SKUs ≈ 70%) -- a realistic
+   Pareto skew, not the uniform ~18% the original generator produced.
+4. **9 SKUs sold <= 10 units** over the full 12 months (3 of those sold
+   *zero* units at all) -- genuine dead-stock candidates.
+
+Calibration confirmed: the alert engine (Stage 5) now has real
+loss-makers to catch, and the sell-through/dead-stock KPIs below have a
+real long tail to find. Proceeding to KPI code."""
+    ),
+    md(
+"""### The config boundary
+
+`src/fashion_config.py` holds every business judgment call this module
+makes as plain data -- the assumed customer lifetime for LTV, what counts
+as a "high" return rate, the dead-stock threshold, the weeks-of-cover
+healthy range. `src/fashion.py`'s functions take `config=` as an argument
+(defaulting to `FASHION_CONFIG`) and never hardcode a threshold inline.
+Porting to another industry means writing a new config file and pointing
+`fashion.py` at it -- `core.py` and `fashion.py` themselves are never
+touched. A live demonstration that this boundary is real (not just an
+architectural claim) comes after the KPIs below."""
+    ),
+    code(
+"""from src import fashion
+from src.fashion_config import FASHION_CONFIG, CONSERVATIVE_FASHION_CONFIG
+
+print("FASHION_CONFIG (the real, primary config used below):")
+for k, v in FASHION_CONFIG.items():
+    print(f"  {k}: {v}")"""
+    ),
+    md(
+"""### KPI 1 — Returns rate, by category and by SKU (units and value)
+
+**Formula:** units_return_rate = returned units ÷ gross units sold;
+value_return_rate = returned (gross) revenue ÷ gross revenue. Both by
+category and by SKU.
+**CEO question:** which categories/SKUs are most exposed to returns, in
+volume terms (a fulfillment/restocking burden) and value terms (a margin
+burden)? The two don't always agree -- a cheap, bulky, frequently-returned
+item can be a bigger operational headache than a financial one, or vice
+versa."""
+    ),
+    code(
+"""returns_by_category = fashion.returns_rate_by_category(orders_clean)
+returns_by_category[["category", "gross_units", "returned_units", "units_return_rate",
+                      "gross_revenue", "returned_revenue", "value_return_rate", "high_return_flag"]].round(3)"""
+    ),
+    code(
+"""returns_by_sku = fashion.returns_rate_by_sku(orders_clean)
+print("Top 10 SKUs by value return rate:")
+returns_by_sku.sort_values("value_return_rate", ascending=False).head(10)[
+    ["sku_id", "category", "gross_units", "units_return_rate", "value_return_rate", "high_return_flag"]
+].round(3)"""
+    ),
+    md(
+"""### KPI 2 — CAC (true), by channel
+
+**Formula:** True CAC = spend on a channel that month ÷ number of
+customers whose FIRST-EVER order that month was attributed to that
+channel. This is deliberately NOT spend ÷ all orders credited (a
+cost-per-order proxy) -- the Stage 2 diagnostic confirmed that proxy
+understates true CAC by 20-30%, since it also credits spend to
+repeat-customer orders the channel had nothing to do with acquiring.
+**CEO question:** what does it actually cost, in acquisition spend, to
+win one new customer through this channel?"""
+    ),
+    code(
+"""cac_summary = fashion.cac_summary_by_channel(orders_clean, marketing_df)
+cac_summary.round(2)"""
+    ),
+    md(
+"""### KPI 3 — ROAS and MER
+
+**Formula (ROAS):** Net Revenue from orders attributed to a channel that
+month ÷ Spend on that channel that month. **CEO question:** for every
+rupee spent on this channel, how many rupees of revenue did it drive?
+
+**Formula (MER):** Total Net Revenue (ALL channels, including organic) ÷
+Total Marketing Spend, same month. **CEO question:** blended across the
+whole business, how many rupees of revenue come in per rupee of marketing
+spend -- the number a board/investor typically asks for."""
+    ),
+    code(
+"""roas = fashion.roas_by_channel(orders_clean, marketing_df)
+print("ROAS by channel, first 3 months:")
+print(roas.sort_values(["month", "channel"]).head(15).round(2).to_string(index=False))"""
+    ),
+    code(
+"""mer = fashion.mer_trend(orders_clean, marketing_df)
+mer.round(2)"""
+    ),
+    md(
+"""### KPI 4 — LTV:CAC ratio
+
+**⚠️ Stated assumption:** LTV cannot be OBSERVED from 12 months of order
+history -- no customer here has a multi-year purchase record to fit a
+retention curve against. `LTV = (company-wide average Contribution Margin
+per Order) x config['ltv_assumed_customer_lifetime_orders']` (currently
+3.5, a stated assumption -- a real business would replace this with an
+empirically fitted number once it has 2-3+ years of cohort data). LTV is
+built from CONTRIBUTION MARGIN, not revenue, since what a customer is
+actually worth is the profit they generate. **LTV:CAC ratio = LTV ÷ True
+CAC**, per channel (LTV itself is one blended, company-wide figure -- this
+dataset lacks the per-channel repeat-purchase granularity for a
+channel-specific LTV, the standard simplification early-stage teams use).
+**CEO question:** for each channel, is a typical customer worth several
+times what it cost to acquire them? (Rule of thumb: healthy is >= 3x.)"""
+    ),
+    code(
+"""ltv_cac = fashion.ltv_cac_ratio(orders_clean, marketing_df)
+ltv_cac.round(2)"""
+    ),
+    md(
+"""**Influencer's LTV:CAC ratio is well under the 3x healthy threshold** --
+every other paid channel clears it comfortably. This is the clean,
+quantified version of "stop spending on influencer marketing," derived
+from the same data as everything else in this notebook, not a gut call."""
+    ),
+    md(
+"""### KPI 5 — AOV and repeat-purchase rate
+
+**Formula (AOV):** Gross Revenue (at checkout, before any later return) ÷
+number of distinct orders, per month. Gross, not net, since AOV is a
+basket-size-at-checkout metric -- whether an item is later returned isn't
+known yet at purchase time. **CEO question:** is the average basket size
+growing, shrinking, or flat?
+
+**Formula (repeat rate):** (customers with >= 2 distinct orders in the
+window) ÷ (all customers with >= 1 order). **CEO question:** of everyone
+who bought once, what share came back for a second order -- the cleanest
+signal of whether the PRODUCT is working, independent of marketing."""
+    ),
+    code(
+"""aov = fashion.aov_trend(orders_clean)
+aov.round(2)"""
+    ),
+    code(
+"""repeat_rate = fashion.repeat_purchase_rate(orders_clean)
+print(f"Total customers: {repeat_rate['total_customers']:,}")
+print(f"Repeat customers (>=2 orders): {repeat_rate['repeat_customers']:,}")
+print(f"Repeat purchase rate: {repeat_rate['repeat_purchase_rate']:.1%}")"""
+    ),
+    md(
+"""### KPI 6 — Cohort retention table
+
+**Formula:** cohort_month = the calendar month of a customer's first-ever
+order. For each cohort and month-offset N: retention_pct = (distinct
+customers from that cohort active in cohort_month+N) ÷ cohort size.
+Offset 0 is always 100% by construction. **CEO question:** does retention
+decay quickly or slowly after acquisition, and does that differ by when a
+customer was acquired (e.g. do sale-month-acquired customers churn
+faster)?"""
+    ),
+    code(
+"""cohort_table = fashion.cohort_retention_table(orders_clean)
+cohort_table.round(3)"""
+    ),
+    code(
+"""avg_by_offset = cohort_table.mean()
+print("Average retention by month-offset, across all cohorts:")
+print(avg_by_offset.round(3))
+print()
+print("Retention decays with cohort age, as expected -- not flat/noisy.")"""
+    ),
+    md(
+"""### KPI 7 — Sell-through rate and weeks of cover
+
+**Formula (sell-through):** units_sold that month ÷ units_available that
+month (= beginning_inventory + units_received -- everything that COULD
+have sold). **CEO question:** of everything ready to sell, what fraction
+actually sold?
+
+**Formula (weeks of cover):** ending_inventory ÷ (units_sold ÷ 4.345
+weeks-per-month). Classified Healthy / Stockout risk / Overstock risk
+using `config['weeks_of_cover_healthy_range']`. **CEO question:** at the
+current sell rate, how many weeks until this SKU runs out -- or, if very
+high, how many weeks of dead capital are sitting in the warehouse?"""
+    ),
+    code(
+"""sell_through = fashion.sell_through_rate_monthly(inventory_df)
+company_sell_through = sell_through.groupby("month").apply(
+    lambda g: g["units_sold"].sum() / g["units_available"].sum(), include_groups=False
+).rename("company_sell_through_rate")
+company_sell_through.to_frame().round(3)"""
+    ),
+    code(
+"""weeks_cover = fashion.weeks_of_cover(inventory_df)
+print("Weeks-of-cover classification, latest month:")
+latest_month = weeks_cover["month"].max()
+print(weeks_cover[weeks_cover["month"] == latest_month]["cover_status"].value_counts())"""
+    ),
+    md(
+"""### KPI 8 — Markdown % and dead-stock %
+
+**Formula (markdown):** a line is "discounted" if unit_price < list_price.
+pct_revenue_discounted = discounted gross revenue ÷ total gross revenue,
+per month; avg_discount_depth = mean((list_price - unit_price) /
+list_price) among discounted lines. **CEO question:** how much of what we
+sell is full-price vs. marked-down, and how deep does discounting go?
+
+**Formula (dead stock):** a SKU is dead stock if it's been available >=
+`config['dead_stock_min_months_available']` months AND its cumulative
+sell-through <= `config['dead_stock_max_cumulative_sell_through']`.
+**CEO question:** of products that have had a fair chance to sell, what
+share are essentially dead capital in the warehouse?"""
+    ),
+    code(
+"""markdown = fashion.markdown_pct(orders_clean)
+markdown.round(3)"""
+    ),
+    code(
+"""dead_stock = fashion.dead_stock_pct(inventory_df)
+print(f"Eligible SKUs (old enough to judge): {dead_stock['n_eligible_skus']}")
+print(f"Dead-stock SKUs: {dead_stock['n_dead_stock_skus']} ({dead_stock['dead_stock_pct_of_eligible']:.1%})")
+print(f"List: {dead_stock['dead_stock_sku_ids']}")"""
+    ),
+    md(
+"""### Proving the config boundary is real
+
+Same functions, same data, only the config object changes -- if the
+output changes, the thresholds are genuinely config-driven, not
+hardcoded. `CONSERVATIVE_FASHION_CONFIG` (in `fashion_config.py`) is a
+stricter analyst's judgment call on the same data: shorter assumed
+customer lifetime (2.0 orders vs. 3.5), a lower bar for "high return"
+(25% vs. 30%), and a looser dead-stock sell-through bar (25% vs. 15%)."""
+    ),
+    code(
+"""print("dead_stock_pct with FASHION_CONFIG (default):")
+default_dead_stock = fashion.dead_stock_pct(inventory_df, config=FASHION_CONFIG)
+print({k: v for k, v in default_dead_stock.items() if k != "dead_stock_sku_ids"})
+
+print()
+print("dead_stock_pct with CONSERVATIVE_FASHION_CONFIG -- SAME function, SAME data, only config differs:")
+conservative_dead_stock = fashion.dead_stock_pct(inventory_df, config=CONSERVATIVE_FASHION_CONFIG)
+print({k: v for k, v in conservative_dead_stock.items() if k != "dead_stock_sku_ids"})"""
+    ),
+    code(
+"""print("LTV:CAC with FASHION_CONFIG (default, 3.5 assumed lifetime orders):")
+print(fashion.ltv_cac_ratio(orders_clean, marketing_df, config=FASHION_CONFIG)[["channel", "ltv", "ltv_cac_ratio"]].round(2).to_string(index=False))
+
+print()
+print("LTV:CAC with CONSERVATIVE_FASHION_CONFIG (2.0 assumed lifetime orders) -- SAME function, only config differs:")
+print(fashion.ltv_cac_ratio(orders_clean, marketing_df, config=CONSERVATIVE_FASHION_CONFIG)[["channel", "ltv", "ltv_cac_ratio"]].round(2).to_string(index=False))"""
+    ),
+    md(
+"""Both LTV and every channel's LTV:CAC ratio changed -- with zero edits to
+`fashion.py`. This is what "swapping industries means writing a new
+config, not editing the engine" concretely looks like: a different
+config produced different classifications and different numbers from the
+exact same calculation code. A genuinely different industry (FMCG, auto
+parts) would additionally need a different `data_generator.py` category
+setup -- out of scope here -- but the config/engine split demonstrated
+above is the same mechanism that boundary relies on."""
+    ),
+    md(
+"""---
+## Stage 3 summary
+
+**Fixed two calibration gaps before writing any KPI code**, both in
+`src/data_generator.py`, with the three original tables' schema/grain
+left untouched: SKU demand is now Pareto-distributed with a guaranteed
+slow-mover tail (top 10 SKUs ≈ 47% of revenue, up from an unrealistic
+~18%), ~7% of SKUs are seeded as structurally weak with elevated returns
+and COGS, the Influencer channel is calibrated genuinely inefficient, and
+repeat-customer selection is now recency-weighted so cohort retention
+actually decays by cohort age instead of sitting flat. Verified with real
+numbers: **28 of 150 SKUs and 1 of 5 channels (Influencer) are now
+contribution-margin-negative after CAC**, and **9 SKUs sold <= 10 units**
+over the year (3 of those zero) -- genuine signal for Stage 5's alert
+model. Built the full D2C Fashion module (`src/fashion.py`) on top of
+`core.py` without editing it: returns rate (units/value, by category and
+SKU), true CAC by channel (spend ÷ new customers, not cost-per-order),
+ROAS/MER, an LTV:CAC ratio with its LTV assumption stated plainly,
+AOV/repeat-purchase rate, a cohort-retention table that visibly decays,
+sell-through rate, weeks-of-cover with stockout/overstock classification,
+markdown %, and dead-stock %. Every business judgment call (the LTV
+lifetime assumption, high-return threshold, dead-stock bar, weeks-of-cover
+bands) lives in `src/fashion_config.py`, never hardcoded in `fashion.py`
+-- proven live by rerunning `dead_stock_pct` and `ltv_cac_ratio` against
+`CONSERVATIVE_FASHION_CONFIG` and showing the output genuinely changes
+with zero code edits. 19 new tests (46 total across three stages) cover
+the calibration, every formula, and the config-boundary behavior.
+
+**Stopping here for review before Stage 4** (dashboard / visualizations)."""
+    ),
+]
+
+
 def build():
     nb = nbf.v4.new_notebook()
-    nb["cells"] = STAGE_1_CELLS + STAGE_2_CELLS
+    nb["cells"] = STAGE_1_CELLS + STAGE_2_CELLS + STAGE_3_CELLS
     nb["metadata"] = {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.11"},

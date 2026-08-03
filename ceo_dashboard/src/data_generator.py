@@ -33,9 +33,11 @@ Design choices worth knowing (so the numbers aren't a black box)
   in later stages -- this is the "roughly 20-40%" range called for in the
   brief.
 - Customers arrive over time (new-customer pool grows monthly) and a
-  fraction of existing customers re-order in later months, which is what
-  makes repeat-purchase-rate and cohort-retention analysis possible in
-  Stage 3.
+  fraction of existing customers re-order in later months, weighted by
+  RECENCY of their last order (`RETAIN_DECAY_RATE`) rather than drawn
+  uniformly from the whole pool -- this is what makes cohort retention
+  actually decay by cohort age, rather than the flat, noisy line a
+  uniform draw produces (caught by a Stage 3 diagnostic).
 - Discounting is heavier in the two sale months, which is what will make
   markdown % visible in Stage 3.
 - Marketing spend per channel is generated to roughly track the number of
@@ -47,6 +49,23 @@ Design choices worth knowing (so the numbers aren't a black box)
   deliberately imperfect for a subset of SKUs -- a few are over-bought
   (feeding dead-stock/markdown analysis) and a few are under-bought (feeding
   stockout warnings) in later stages.
+- SKU demand is Pareto-skewed, not uniform: each SKU gets a `popularity_weight`
+  drawn from a Pareto distribution, used to weight which SKU an order line
+  picks. This produces a realistic head of best-sellers and a long tail of
+  slow/near-dead SKUs, instead of ~150 SKUs each selling about the same
+  (which a Stage-2 diagnostic caught: uniform sampling had produced a flat
+  top-10-SKUs-are-18%-of-revenue result, unrealistic for fashion).
+- A small subset (~7%) of SKUs are deliberately seeded as structurally weak
+  "problem SKUs": elevated return rate (50-68%) AND elevated COGS-as-%-of-
+  price (58-72%), landing some of them at negative contribution margin even
+  before marketing cost is considered, and pushing others there once CAC is
+  allocated. One channel (Influencer) is deliberately calibrated inefficient
+  (high cost per order relative to what its orders are worth), so it fails
+  to earn back its own acquisition cost. Both exist so the Stage 5
+  margin-risk alert model has genuine loss-makers to catch -- a Stage 2/3
+  diagnostic found zero loss-making channels and only 3 of 150 SKUs
+  loss-making under the original (uncalibrated) generator, too thin a
+  signal for an alert model to be meaningful against.
 
 Reproducibility
 ----------------
@@ -90,11 +109,15 @@ CATEGORY_SPECS = {
 
 # Marketing channels: base efficiency = expected spend per order credited to
 # that channel (Organic/Email is ~free -- it's word-of-mouth / retention,
-# not a paid acquisition channel).
+# not a paid acquisition channel). Influencer is deliberately calibrated
+# expensive -- a real, common D2C failure mode (glossy vanity-metric
+# campaigns that don't earn back their cost) -- so it comes out
+# contribution-margin-negative after CAC in the Stage 3 diagnostic, giving
+# the Stage 5 alert model a genuine channel-level loss-maker to catch.
 CHANNEL_SPECS = {
     "Instagram Ads": {"cost_per_order": (350, 90), "new_customer_weight": 0.34},
     "Google Ads":    {"cost_per_order": (420, 110), "new_customer_weight": 0.24},
-    "Influencer":    {"cost_per_order": (500, 150), "new_customer_weight": 0.16},
+    "Influencer":    {"cost_per_order": (1650, 350), "new_customer_weight": 0.16},
     "Affiliate":     {"cost_per_order": (280, 70), "new_customer_weight": 0.10},
     "Organic/Email": {"cost_per_order": (0, 0), "new_customer_weight": 0.16},
 }
@@ -103,9 +126,40 @@ CHANNELS = list(CHANNEL_SPECS.keys())
 # Sale months get a demand bump and heavier discounting.
 SALE_MONTHS = {pd.Timestamp("2025-11-01").to_period("M"), pd.Timestamp("2026-06-01").to_period("M")}
 
+# Per-month decay applied to a customer's odds of being selected for a
+# repeat order, based on months since their last order (see
+# `generate_orders`). Lower = faster churn = sharper cohort-retention decay.
+RETAIN_DECAY_RATE = 0.55
+
 
 def _month_index(ts: pd.Timestamp) -> int:
     return (ts.year - START_DATE.year) * 12 + (ts.month - START_DATE.month)
+
+
+# Fraction of SKUs seeded as structurally weak "problem SKUs" -- elevated
+# return rate AND elevated COGS-as-%-of-price, independent of category.
+# Models a real, common failure mode (a sizing issue driving returns, or a
+# supplier cost renegotiation gone bad) that a category-level average would
+# never reveal on its own.
+PROBLEM_SKU_FRACTION = 0.07
+PROBLEM_SKU_COGS_PCT_RANGE = (0.58, 0.72)
+PROBLEM_SKU_RETURN_RATE_RANGE = (0.50, 0.68)
+
+# Shape of the Pareto distribution used for the SKU popularity base weight.
+# Lower alpha = heavier tail = more concentrated demand. Chosen empirically
+# (3.5) to land top-10-SKUs-by-revenue around 35-45% -- a uniform weight
+# (the original Stage 1/2 approach) produced an unrealistic ~18%, while a
+# heavier tail (alpha ~1.4) over-concentrated to ~75-90%, more Zipfian than
+# real fashion retail. A pure Pareto draw at this alpha rarely produces a
+# genuine dead-stock tail on its own, so a separate SLOW_MOVER mechanism
+# below guarantees one explicitly, rather than leaving it to chance.
+SKU_POPULARITY_PARETO_ALPHA = 3.5
+
+# A designated slow-mover subset gets its popularity weight crushed by this
+# factor range, guaranteeing a real long tail of near-dead-stock SKUs
+# regardless of how the Pareto draw above happens to land.
+SLOW_MOVER_FRACTION = 0.10
+SLOW_MOVER_WEIGHT_MULTIPLIER_RANGE = (0.03, 0.12)
 
 
 def _build_sku_catalog(rng: np.random.Generator) -> pd.DataFrame:
@@ -113,12 +167,36 @@ def _build_sku_catalog(rng: np.random.Generator) -> pd.DataFrame:
     file -- a real order export is usually already denormalized with
     category/size/price on the order line, which is the shape orders.csv
     uses. This catalog exists only to generate orders/inventory consistently.
+
+    Three calibration mechanisms live here (added after a Stage 2/3
+    diagnostic found the original uniform-demand, uniformly-healthy-margin
+    catalog gave the margin-risk alert model nothing real to catch):
+
+    - `popularity_weight`: a Pareto-distributed base weight, used in
+      `generate_orders` to bias which SKU an order line picks, producing a
+      realistic head of best-sellers instead of every SKU selling about
+      the same amount.
+    - a designated `is_slow_mover` subset (~10% of SKUs) has that weight
+      crushed by an extra small multiplier, guaranteeing a genuine
+      near-dead-stock tail rather than leaving it to chance -- a pure
+      Pareto draw at the alpha needed for a realistic head concentration
+      rarely produces enough true dead stock on its own.
+    - `is_problem_sku` / overridden `return_rate` and `unit_cogs`: ~7% of
+      SKUs get a materially worse return rate and cost structure than their
+      category average, landing some at negative contribution margin
+      outright and others there once marketing cost is allocated.
     """
     rows = []
     for category, spec in CATEGORY_SPECS.items():
         for i in range(spec["n_skus"]):
             base_price = rng.uniform(*spec["price_range"])
-            cogs_pct = rng.uniform(*spec["cogs_pct_range"])
+            is_problem = rng.random() < PROBLEM_SKU_FRACTION
+            if is_problem:
+                cogs_pct = rng.uniform(*PROBLEM_SKU_COGS_PCT_RANGE)
+                return_rate = rng.uniform(*PROBLEM_SKU_RETURN_RATE_RANGE)
+            else:
+                cogs_pct = rng.uniform(*spec["cogs_pct_range"])
+                return_rate = spec["return_rate"]
             # Most SKUs launch at the start of the window; ~15% are
             # "new arrivals" launched partway through the year, so
             # inventory/sell-through analysis has genuinely young SKUs.
@@ -129,10 +207,19 @@ def _build_sku_catalog(rng: np.random.Generator) -> pd.DataFrame:
                 "sizes": spec["sizes"],
                 "base_price": round(base_price, -1) - 1,   # e.g. 899, 1299 style pricing
                 "unit_cogs": round(base_price * cogs_pct, 2),
-                "return_rate": spec["return_rate"],
+                "return_rate": return_rate,
+                "is_problem_sku": is_problem,
                 "launch_month": launch_month,
             })
-    return pd.DataFrame(rows)
+    catalog = pd.DataFrame(rows)
+
+    n = len(catalog)
+    popularity = rng.pareto(SKU_POPULARITY_PARETO_ALPHA, size=n) + 0.05
+    is_slow_mover = rng.random(n) < SLOW_MOVER_FRACTION
+    popularity[is_slow_mover] *= rng.uniform(*SLOW_MOVER_WEIGHT_MULTIPLIER_RANGE, size=is_slow_mover.sum())
+    catalog["popularity_weight"] = popularity
+    catalog["is_slow_mover"] = is_slow_mover
+    return catalog
 
 
 def _daily_order_volume(rng: np.random.Generator) -> pd.Series:
@@ -165,8 +252,13 @@ def generate_orders(rng: np.random.Generator, sku_catalog: pd.DataFrame,
     total_orders = int(daily_orders.sum())
 
     # Cap the eventual customer pool near the target by tuning the
-    # new-vs-repeat split as the pool grows.
-    customer_pool: list[str] = []
+    # new-vs-repeat split as the pool grows. Preallocated arrays (not a
+    # plain Python list) so recency-weighted repeat selection below stays
+    # fast even as the pool grows into the thousands.
+    max_customers = n_customers_target * 4
+    customer_pool = np.empty(max_customers, dtype=object)
+    last_order_month = np.full(max_customers, -999, dtype=np.int32)
+    pool_size = 0
     next_customer_num = 1
 
     order_rows = []
@@ -181,16 +273,29 @@ def generate_orders(rng: np.random.Generator, sku_catalog: pd.DataFrame,
         is_sale_month = month_period in sale_month_periods
 
         for _ in range(int(n_orders_today)):
-            pool_size = len(customer_pool)
             # Repeat probability rises from ~15% early on to ~40% once the
             # pool is established, capped so the pool still grows toward target.
             repeat_prob = min(0.40, 0.15 + 0.30 * (pool_size / n_customers_target))
             if pool_size > 0 and rng.random() < repeat_prob:
-                customer_id = customer_pool[rng.integers(0, pool_size)]
+                # Repeat customer selection is RECENCY-weighted, not
+                # uniform: a customer who ordered last month is far more
+                # likely to reorder than one who ordered 6 months ago
+                # (RETAIN_DECAY_RATE ** months_since_last_order). This is
+                # what makes cohort retention actually decay by cohort age
+                # -- a Stage 3 diagnostic found uniform selection produced
+                # flat, noisy retention with no decay pattern at all.
+                months_since = m_idx - last_order_month[:pool_size]
+                weights = RETAIN_DECAY_RATE ** np.maximum(months_since, 0)
+                weights = weights / weights.sum()
+                idx = rng.choice(pool_size, p=weights)
+                customer_id = customer_pool[idx]
+                last_order_month[idx] = m_idx
                 is_new_customer = False
             else:
                 customer_id = f"CUST-{next_customer_num:05d}"
-                customer_pool.append(customer_id)
+                customer_pool[pool_size] = customer_id
+                last_order_month[pool_size] = m_idx
+                pool_size += 1
                 next_customer_num += 1
                 is_new_customer = True
 
@@ -206,10 +311,20 @@ def generate_orders(rng: np.random.Generator, sku_catalog: pd.DataFrame,
             order_id = f"ORD-{order_counter:06d}"
             order_counter += 1
 
-            # 1-3 line items per order, weighted toward 1.
+            # 1-3 line items per order, weighted toward 1. SKU choice is
+            # weighted by `popularity_weight` (Pareto-distributed), not
+            # uniform, so a head of best-sellers gets picked far more often
+            # than the long tail. Uses numpy's weighted choice without
+            # replacement directly -- pandas' `.sample(weights=...)` raises
+            # when a single weight dominates the rest, which a Pareto tail
+            # does by design.
             n_lines = rng.choice([1, 2, 3], p=[0.68, 0.24, 0.08])
             eligible_skus = sku_catalog[sku_catalog["launch_month"] <= m_idx]
-            chosen = eligible_skus.sample(n=min(n_lines, len(eligible_skus)), random_state=rng.integers(0, 2**31 - 1))
+            eligible_p = eligible_skus["popularity_weight"].to_numpy()
+            eligible_p = eligible_p / eligible_p.sum()
+            chosen_idx = rng.choice(len(eligible_skus), size=min(n_lines, len(eligible_skus)),
+                                     replace=False, p=eligible_p)
+            chosen = eligible_skus.iloc[chosen_idx]
 
             for _, sku_row in chosen.iterrows():
                 quantity = 1 if rng.random() < 0.85 else 2
@@ -243,6 +358,7 @@ def generate_orders(rng: np.random.Generator, sku_catalog: pd.DataFrame,
                     schema.SIZE: size,
                     schema.QUANTITY: int(quantity),
                     schema.UNIT_PRICE: unit_price,
+                    schema.LIST_PRICE: sku_row["base_price"],
                     schema.UNIT_COGS: sku_row["unit_cogs"],
                     schema.SHIPPING_COST: shipping_cost,
                     schema.PAYMENT_FEE: payment_fee,
@@ -338,6 +454,22 @@ def generate_inventory_snapshots(rng: np.random.Generator, sku_catalog: pd.DataF
                 received = int(max(0, round(avg_demand * target_cover * rng.uniform(0.85, 1.15))))
             else:
                 received = 0
+
+            # The restock heuristic above is based on this SKU's AVERAGE
+            # monthly demand, but realized demand (`sold`, from actual
+            # orders.csv) can burst well above average -- Pareto-skewed
+            # popularity and sale-month spikes both do this. Selling more
+            # than was ever in stock is a logical impossibility, so an
+            # under-forecast restock is topped up to cover realized demand
+            # exactly (an emergency reorder/backorder fulfillment, in
+            # business terms) -- this keeps orders.csv and
+            # inventory_snapshots.csv reconciled while still leaving
+            # `beginning` inventory low for "under" style SKUs, which is
+            # what actually drives their stockout-risk signal (low
+            # beginning stock, thin weeks-of-cover), not an impossible sale.
+            shortfall = sold - (beginning + received)
+            if shortfall > 0:
+                received += shortfall
 
             ending = max(beginning + received - sold, 0)
             rows.append({

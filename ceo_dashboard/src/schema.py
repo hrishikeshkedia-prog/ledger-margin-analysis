@@ -41,6 +41,9 @@ CATEGORY = "category"                 # product category (Tops, Dresses, ...)
 SIZE = "size"                         # size variant of the SKU
 QUANTITY = "quantity"                 # units on this line
 UNIT_PRICE = "unit_price"             # realized selling price per unit (post-discount)
+LIST_PRICE = "list_price"             # the SKU's un-discounted price -- added in Stage 3
+                                       # so a markdown % (unit_price < list_price) is
+                                       # computable; purely additive, existing columns unchanged
 UNIT_COGS = "unit_cogs"               # cost of goods per unit for this SKU
 SHIPPING_COST = "shipping_cost"       # fulfillment/shipping cost allocated to this line
 PAYMENT_FEE = "payment_gateway_fee"   # payment processor fee allocated to this line
@@ -50,7 +53,7 @@ RETURN_DATE = "return_date"           # date of return, NaT if not returned
 
 ORDERS_SCHEMA = [
     ORDER_ID, ORDER_LINE_ID, ORDER_DATE, CUSTOMER_ID, SKU_ID, CATEGORY, SIZE,
-    QUANTITY, UNIT_PRICE, UNIT_COGS, SHIPPING_COST, PAYMENT_FEE,
+    QUANTITY, UNIT_PRICE, LIST_PRICE, UNIT_COGS, SHIPPING_COST, PAYMENT_FEE,
     MARKETING_CHANNEL, IS_RETURN, RETURN_DATE,
 ]
 

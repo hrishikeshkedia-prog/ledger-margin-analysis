@@ -68,7 +68,13 @@ CHANNEL_COLORS = {
 }
 
 _FONT = dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=INK["primary"], size=13)
-_CAPTION_WRAP_WIDTH = 128     # characters per line, tuned for ~1150px figure width at 12px font
+_FIGURE_WIDTH = 1150          # explicit width every chart renders at (px) -- caption wrapping and
+                               # subplot spacing below are calibrated against this. Without setting
+                               # it explicitly, fig.show()/the "png" renderer falls back to plotly's
+                               # default (~700px), which was caught during Stage 7's visual QA:
+                               # overlapping scorecard tiles, colliding SKU labels, subplot titles
+                               # running together, and clipped captions on every chart.
+_CAPTION_WRAP_WIDTH = 128     # characters per line, tuned for _FIGURE_WIDTH at 12px font
 _CAPTION_LINE_PX = 17
 _CAPTION_TOP_GAP_PX = 16      # gap between the axis baseline and the caption block
 _MARGIN_TOP = 70
@@ -98,7 +104,7 @@ def _finalize(fig: go.Figure, title: str, caption: str, height: int, extra_botto
     plot_h = max(height - _MARGIN_TOP - margin_b, 40)
 
     fig.update_layout(
-        plot_bgcolor=SURFACE, paper_bgcolor=SURFACE, font=_FONT, height=height,
+        plot_bgcolor=SURFACE, paper_bgcolor=SURFACE, font=_FONT, height=height, width=_FIGURE_WIDTH,
         margin=dict(t=_MARGIN_TOP, b=margin_b, **_MARGIN_LR),
         title=dict(text=title, font=dict(size=16)),
     )
@@ -176,16 +182,21 @@ def render_kpi_scorecard(metrics: dict) -> go.Figure:
         cx = tile_w * (i + 0.5)
         fig.add_shape(type="rect", x0=tile_w * i + tile_w * 0.06, x1=tile_w * (i + 1) - tile_w * 0.06,
                       y0=0.10, y1=0.95, line=dict(color=GRID, width=1), fillcolor=SURFACE, layer="below")
-        fig.add_annotation(x=cx, y=0.72, text=label, showarrow=False,
-                            font=dict(size=12, color=INK["secondary"]), xanchor="center")
-        fig.add_annotation(x=cx, y=0.40, text=f"<b>{value}</b>", showarrow=False,
+        # wrap long labels onto 2 lines -- at 6 tiles across _FIGURE_WIDTH, a
+        # single-line label like "Returns Cost (% of Gross CM)" runs edge to
+        # edge into its neighbor's label with no gap (caught in Stage 7
+        # visual QA)
+        wrapped_label = "<br>".join(textwrap.wrap(label, width=16))
+        fig.add_annotation(x=cx, y=0.88, text=wrapped_label, showarrow=False,
+                            font=dict(size=12, color=INK["secondary"]), xanchor="center", yanchor="top")
+        fig.add_annotation(x=cx, y=0.30, text=f"<b>{value}</b>", showarrow=False,
                             font=dict(size=25, color=STATUS["critical"] if is_warning else INK["primary"]),
                             xanchor="center")
 
     return _finalize(
         fig, "CEO Scorecard — D2C Fashion (synthetic data)",
         "Red values mark a headline warning sign (heavy returns drag, weak acquisition payback, or meaningful dead stock).",
-        height=230,
+        height=270,
     )
 
 

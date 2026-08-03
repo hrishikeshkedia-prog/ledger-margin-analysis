@@ -299,6 +299,8 @@ def build_inventory_action_table(inventory_df: pd.DataFrame, config: dict = FORE
             reorder_qty = max(0, round(row["forecast_units"] * config["stockout_safety_margin"] - row["current_stock"]))
             return f"Reorder ~{reorder_qty} units before {row['forecast_month']}"
         if row["inventory_flag"] == "Overstock Risk":
+            if row["forecast_units"] == 0:
+                return f"Markdown/clearance -- no recent sales pace to forecast against ({row['current_stock']:.0f} units sitting idle)"
             return f"Markdown/clearance -- {row['forecast_months_cover']:.1f} months of cover at forecast pace"
         return "No action needed"
 

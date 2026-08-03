@@ -48,10 +48,13 @@ ceo_dashboard/
     dashboard.py             presentation layer (Stage 4): reusable plotly chart functions
     alerts.py                 Stage 5: rules-based margin-risk alert engine (no ML)
     forecast.py                Stage 6: demand/inventory forecast (the one real predictive model)
+    export_html.py             Stage 7: standalone offline HTML export (reuses dashboard.py charts)
   data/synthetic/         generated CSVs (orders, marketing_spend, inventory_snapshots, opex)
   notebooks/
     ceo_dashboard.ipynb   the deliverable notebook, built in stages
     build_notebook.py     builds the notebook programmatically with nbformat
+    ceo_dashboard.html    the standalone presentation file (Stage 7) -- open this to present
+    build_dashboard_html.py  regenerates ceo_dashboard.html
   tests/                  pytest suite against the synthetic data
 ```
 
@@ -166,6 +169,38 @@ the 152 recorded `near_stockout_flag` events from Stage 3.5: 79% recall,
 27% precision, with 21 events flagged as structurally unreachable (too
 early in a SKU's life for any forecast to exist yet).
 
+## Standalone HTML presentation
+
+`src/export_html.py` builds the file this project is actually presented
+from: **`notebooks/ceo_dashboard.html`**, one self-contained HTML file
+(charts embedded as base64 PNGs) that opens offline, double-clicked from
+disk, in any browser -- no Python, no Colab, no live kernel. Like
+`dashboard.py`, it is presentation-only: every number and every chart comes
+from an existing `core.py` / `fashion.py` / `alerts.py` / `forecast.py` /
+`dashboard.py` function, reused as-is. The page opens with a synthetic-data
+disclaimer, an executive-summary band with the four headline findings in
+plain English (returns' share of contribution margin, the CAC-vs-returns
+split behind the loss-making SKUs, the loss-making/at-risk counts, and the
+forecast's WAPE plus its recall/precision trade-off), then the same seven
+charts in CEO reading order -- performance & margin, returns bridge,
+SKU/channel margin & alerts, inventory & forecast -- each keeping its
+one-line takeaway caption, followed by the full alerts table and the
+inventory-action tables. It closes with an **honest-limitations footer**
+that states plainly, not hidden in a caveat nobody reads: the post-sale-
+month forecast bias, the stockout rule's recall-over-precision trade-off,
+the low-volume tail's inherent noise, and the single-observation seasonal
+factor.
+
+Regenerate it with:
+
+```
+BROWSER_PATH=/path/to/chrome python notebooks/build_dashboard_html.py
+```
+
+(`BROWSER_PATH` is only needed because rendering the embedded PNGs uses
+kaleido, which needs a real Chrome/Chromium binary and doesn't bundle one
+in every environment.)
+
 ## Swappable data loading
 
 `src/data_loader.py` renames raw CSV headers to canonical names using a
@@ -205,6 +240,7 @@ This project is built and reviewed one stage at a time:
 4. Dashboard / visualizations
 5. Margin-risk alert model
 6. Demand / inventory forecast model
+7. Standalone HTML presentation export
 
 Each stage's notebook section states the KPI/model's formula and the
 business question it answers before using it.

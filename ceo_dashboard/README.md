@@ -46,6 +46,7 @@ ceo_dashboard/
     fashion_config.py       Layer 2 config: every fashion-specific threshold/assumption
     fashion.py               D2C Fashion module (Layer 2), built on core.py, config-driven
     dashboard.py             presentation layer (Stage 4): reusable plotly chart functions
+    alerts.py                 Stage 5: rules-based margin-risk alert engine (no ML)
   data/synthetic/         generated CSVs (orders, marketing_spend, inventory_snapshots, opex)
   notebooks/
     ceo_dashboard.ipynb   the deliverable notebook, built in stages
@@ -115,6 +116,33 @@ across every chart. The notebook sets `plotly.io.renderers.default =
 this notebook is opened (GitHub, nbviewer, PDF), not only in a live
 Jupyter/Colab session where the default interactive renderer would leave
 static viewers with a blank cell.
+
+## Margin-risk alert engine
+
+`src/alerts.py` is deliberately **rules-based, not a trained classifier**.
+The 28 loss-making SKUs and the Influencer channel were seeded on purpose
+in `data_generator.py`; a model trained to predict them would just
+re-learn the seed logic -- circular, and not something that generalizes
+to real data with no planted answer key. Instead:
+
+1. **Flag** -- reads loss-making status straight off
+   `fashion.channel_margin_after_cac` / `fashion.sku_margin_after_cac`.
+2. **Explain** -- decomposes each flag into named, rupee-quantified
+   drivers (SKU: returns / CAC / thin margin / fixed-cost burden; channel:
+   CAC excess / payback shortfall), naming the largest as primary cause.
+3. **Early warning** -- flags currently-healthy SKUs via two simple,
+   stated trend rules (a 3-month decline streak, or a linear-fit
+   projection crossing zero within 2 months) over each SKU's own monthly
+   contribution-margin history -- a trend *fit* on one SKU's own past, not
+   a cross-sectional classifier.
+4. **Output** -- `alerts.build_alerts_table` returns one ranked table:
+   entity, current margin, severity, primary cause, a plain-language
+   reason citing the actual numbers, and a recommended action.
+
+Every threshold lives in `alerts.ALERTS_CONFIG`, named and justified in
+one sentence each. The genuine predictive model in this project is
+Stage 6's demand/inventory forecast, which predicts something that was
+**not** seeded.
 
 ## Swappable data loading
 

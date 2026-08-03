@@ -1323,9 +1323,179 @@ which will reuse `fashion.channel_margin_after_cac` and
 ]
 
 
+# ===========================================================================
+# STAGE 5 -- Margin-Risk Alert Engine
+# ===========================================================================
+STAGE_5_CELLS = [
+    md(
+"""---
+## Stage 5 — Margin-Risk Alert Engine
+
+### Critical design constraint: no trained classifier here
+
+It would be tempting to train a logistic regression or decision tree to
+"predict" which SKUs are loss-making. That would be **circular**: the 28
+loss-making SKUs and the Influencer channel in this dataset were
+deliberately seeded (`src/data_generator.py`'s `PROBLEM_SKU_*` constants
+and the Influencer cost calibration) -- a model trained on this data would
+just re-learn the exact rule that generated the seed, not discover
+anything. On real data with no planted answer key, that circularity isn't
+available to hide behind, and the "model" would likely just be memorizing
+noise. An interviewer asking "how did you validate this" would have no
+good answer.
+
+This module is **transparent rules + arithmetic decomposition** instead:
+every number below is a plain formula over already-computed KPI columns,
+with a stated business rationale, never a fitted weight. The genuine
+predictive model in this project is Stage 6's demand/inventory forecast,
+which predicts something that was **not** seeded (future units) --
+that's where a real, honestly-validated model belongs."""
+    ),
+    md(
+"""### 1. Flag — who is currently loss-making
+
+Reads loss-making status straight off `fashion.channel_margin_after_cac`
+and `fashion.sku_margin_after_cac` -- **not reimplemented here**. Expect
+the same 28 SKUs and the Influencer channel verified in Stage 3/4."""
+    ),
+    code(
+"""from src import alerts
+
+sku_causes = alerts.decompose_sku_causes(orders_clean, marketing_df)
+channel_causes = alerts.decompose_channel_causes(orders_clean, marketing_df)
+
+n_loss_sku = sku_causes["is_loss_making"].sum()
+loss_channels = channel_causes.loc[channel_causes["is_loss_making"], "channel"].tolist()
+print(f"Loss-making SKUs: {n_loss_sku} (expected 28)")
+print(f"Loss-making channels: {loss_channels} (expected ['Influencer'])")
+assert n_loss_sku == 28
+assert loss_channels == ["Influencer"]
+print("Confirmed: matches Stage 3/4 verification.")"""
+    ),
+    md(
+"""### 2. Explain — why is each one negative?
+
+**SKU decomposition** (`alerts.decompose_sku_causes`) breaks the gap
+between a SKU's actual contribution margin after CAC and a hypothetical
+"healthy" baseline into four named, rupee-quantified drivers -- each
+floored at 0 (a driver that isn't a problem contributes nothing, never a
+negative "credit"):
+
+| Driver | Formula | What it means |
+|---|---|---|
+| **Returns drag** | Σ over returned lines of (gross revenue − unit COGS × qty) | Margin given back specifically to returns |
+| **CAC drag** | SKU's `contribution_margin` − its `cm_after_cac` | Total acquisition cost allocated to this SKU (isolated by subtracting two already-computed columns, not recomputed) |
+| **Thin-margin drag** | (category's revenue-weighted avg gross margin % − this SKU's gross margin %) × net revenue | Rupees short of category peers' typical product economics, at this SKU's actual revenue |
+| **Fixed-cost drag** | (this SKU's variable-cost-as-%-of-revenue − company average) × gross revenue | Shipping/payment-fee cost is roughly flat per order regardless of item price, so a cheap or low-volume SKU carries a disproportionate share |
+
+The **primary cause** is whichever driver has the largest rupee magnitude
+(ties broken returns > CAC > thin margin > fixed cost -- the first two are
+usually the higher-leverage levers to act on).
+
+**Channel decomposition** (`alerts.decompose_channel_causes`) is simpler,
+two drivers: **CAC excess** (this channel's True CAC above the median of
+*other* paid channels, × its new customers) vs. **payback shortfall**
+(company-average contribution margin per order minus this channel's own,
+× its orders)."""
+    ),
+    code(
+"""worst_skus = sku_causes[sku_causes["is_loss_making"]].sort_values("cm_after_cac").head(10)
+worst_skus[["sku_id", "category", "cm_after_cac", "returns_drag", "cac_drag",
+            "thin_margin_drag", "fixed_cost_drag", "primary_driver"]].round(0)"""
+    ),
+    code(
+"""channel_causes[["channel", "cm_after_cac", "is_loss_making", "true_cac", "channel_cac_excess",
+                 "contribution_margin_per_order", "channel_payback_shortfall", "primary_driver"]].round(0)"""
+    ),
+    md(
+"""**Reading the SKU table:** 22 of the 28 loss-making SKUs are primarily
+CAC-driven (a pro-rata share of acquisition cost that exceeds their
+product economics), and 6 are primarily returns-driven. **Reading the
+channel table:** Influencer's CAC excess (~₹26 lakh) dwarfs its payback
+shortfall (~₹10K) by two orders of magnitude -- unambiguously a CAC
+problem, not a targeting-quality problem."""
+    ),
+    md(
+"""### 3. Early warning — trending toward negative
+
+`alerts.detect_early_warning_skus` flags SKUs that are **not** currently
+loss-making, but whose own monthly (pre-CAC) contribution-margin
+trajectory says trouble is coming. Pre-CAC, deliberately: CAC is allocated
+at the channel-month level company-wide, not a stable per-SKU monthly
+rate over a short window, so this looks at whether the SKU's own product
+economics are deteriorating, before layering CAC-timing noise on top.
+
+Only SKUs with **at least 4 months of sales history** are evaluated (too
+few points make any trend statistically meaningless). A SKU is flagged if
+**either** simple, stated rule fires:
+
+1. **Decline streak**: monthly contribution margin strictly decreased in
+   each of the last **3** consecutive months it sold in.
+2. **Projected zero-cross**: an ordinary least-squares line
+   (`numpy.polyfit`, degree 1 -- a trend *fit* on this one SKU's own
+   history, not a classifier trained across SKUs) through its last **4**
+   months has a negative slope, and extrapolating it forward crosses zero
+   within the next **2** months.
+
+All four thresholds (`ALERTS_CONFIG` in `src/alerts.py`) are named
+constants with a one-line rationale in the module -- no unexplained magic
+numbers."""
+    ),
+    code(
+"""early_warning = alerts.detect_early_warning_skus(orders_clean, marketing_df)
+print(f"At-risk SKUs flagged: {len(early_warning)}")
+early_warning.sort_values("latest_monthly_cm").round(1)"""
+    ),
+    md(
+"""### 4. Output — the ranked alerts table
+
+One table, `alerts.build_alerts_table`, combining both layers: every
+loss-making SKU/channel (ranked most-negative-first) followed by every
+at-risk SKU. Each row names its entity, current margin, severity, primary
+cause, a plain-language reason citing the actual numbers, and a
+recommended action mapped from the primary cause."""
+    ),
+    code(
+"""alerts_table = alerts.build_alerts_table(orders_clean, marketing_df)
+print(f"Total alerts: {len(alerts_table)}  ({(alerts_table['severity']=='Loss-Making').sum()} loss-making, "
+      f"{(alerts_table['severity']=='At-Risk').sum()} at-risk)")
+alerts_table"""
+    ),
+    md(
+"""---
+## Stage 5 summary
+
+Built a **rules-based** margin-risk alert engine (`src/alerts.py`) --
+explicitly not a trained classifier, since the loss-makers in this
+dataset were deliberately seeded and a model trained on them would just
+re-learn the seed, a circularity an interviewer would rightly catch.
+**Flag**: reads loss-making status straight off `fashion.channel_margin_after_cac`
+/ `fashion.sku_margin_after_cac`, confirmed to match the known 28 SKUs +
+Influencer. **Explain**: decomposes every flag into four named,
+rupee-quantified SKU drivers (returns, CAC, thin margin, fixed-cost
+burden) or two channel drivers (CAC excess, payback shortfall), naming
+the largest as primary cause -- 22 SKUs came back CAC-driven, 6
+returns-driven, and Influencer unambiguously CAC-driven. **Early
+warning**: 12 currently-healthy SKUs flagged via two simple, stated trend
+rules (a 3-month decline streak, or a linear-fit projection crossing zero
+within 2 months) over each SKU's own history -- a trend fit, not a
+cross-sectional classifier. **Output**: one ranked table, 41 rows (29
+loss-making, 12 at-risk), each with a plain-language reason and a
+recommended action. 15 new tests (77 total across five stages) cover the
+flag/decompose/detect/output logic, including a regression test for a
+real bug caught during development (a label-key mismatch that silently
+collapsed every primary cause to "Multiple factors" until a test compared
+the decomposition's own driver columns against the labels dictionary).
+
+**Stopping here for review before Stage 6** (the demand/inventory
+forecast -- the genuine predictive model in this project)."""
+    ),
+]
+
+
 def build():
     nb = nbf.v4.new_notebook()
-    nb["cells"] = STAGE_1_CELLS + STAGE_2_CELLS + STAGE_3_CELLS + STAGE_4_CELLS
+    nb["cells"] = STAGE_1_CELLS + STAGE_2_CELLS + STAGE_3_CELLS + STAGE_4_CELLS + STAGE_5_CELLS
     nb["metadata"] = {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.11"},

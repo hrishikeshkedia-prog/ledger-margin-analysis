@@ -49,6 +49,19 @@ def test_inventory_chain_consistency(generated):
         assert (g[schema.INV_END].iloc[:-1].values == g[schema.INV_BEGIN].iloc[1:].values).all()
 
 
+def test_near_stockout_events_are_recorded(generated):
+    """Stage 3.5: emergency restock top-ups must be a detectable signal
+    (near_stockout_flag / emergency_units), not silently folded into
+    units_received the way they originally were."""
+    inv = generated["inventory_snapshots"]
+    assert inv[schema.INV_NEAR_STOCKOUT].dtype == bool
+    # emergency_units > 0 exactly when the flag is True, never otherwise
+    assert (inv.loc[inv[schema.INV_NEAR_STOCKOUT], schema.INV_EMERGENCY_UNITS] > 0).all()
+    assert (inv.loc[~inv[schema.INV_NEAR_STOCKOUT], schema.INV_EMERGENCY_UNITS] == 0).all()
+    # the recalibrated (Pareto-skewed) generator should actually produce some
+    assert inv[schema.INV_NEAR_STOCKOUT].sum() > 0
+
+
 def test_loader_round_trip(tmp_path, generated):
     dg.save_all(generated, str(tmp_path))
     loaded = dl.load_orders(str(tmp_path / "orders.csv"))

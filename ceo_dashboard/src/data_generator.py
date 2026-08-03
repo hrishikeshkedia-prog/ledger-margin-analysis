@@ -48,7 +48,12 @@ Design choices worth knowing (so the numbers aren't a black box)
   inventory table reconciles with orders) but purchasing decisions are
   deliberately imperfect for a subset of SKUs -- a few are over-bought
   (feeding dead-stock/markdown analysis) and a few are under-bought (feeding
-  stockout warnings) in later stages.
+  stockout warnings) in later stages. When realized demand bursts past what
+  the restock heuristic forecast, an emergency top-up keeps sold <=
+  available, and that event is RECORDED (`near_stockout_flag` /
+  `emergency_units` in `inventory_snapshots`) rather than silently folded
+  into `units_received` -- a Stage 3.5 fix, so Stage 6's forecast has a
+  real, detectable near-stockout signal instead of one smoothed away.
 - SKU demand is Pareto-skewed, not uniform: each SKU gets a `popularity_weight`
   drawn from a Pareto distribution, used to weight which SKU an order line
   picks. This produces a realistic head of best-sellers and a long tail of
@@ -412,6 +417,14 @@ def generate_inventory_snapshots(rng: np.random.Generator, sku_catalog: pd.DataF
     under-bought (too little -> stockout risk), so later stages have real
     overstock/stockout cases to detect rather than a uniformly well-run
     warehouse.
+
+    `near_stockout_flag` / `emergency_units`: whenever the restock
+    heuristic under-forecasts a month's realized demand (Pareto-skewed
+    popularity and sale-month spikes both cause bursts above a SKU's
+    average), the shortfall is topped up so units_sold never exceeds what
+    was available -- and that event is recorded here rather than folded
+    invisibly into `units_received`. This is the detectable near-stockout
+    signal Stage 6's demand/inventory forecast is meant to catch.
     """
     orders_df = orders_df.copy()
     orders_df["month"] = orders_df[schema.ORDER_DATE].dt.to_period("M").astype(str)
@@ -467,8 +480,15 @@ def generate_inventory_snapshots(rng: np.random.Generator, sku_catalog: pd.DataF
             # `beginning` inventory low for "under" style SKUs, which is
             # what actually drives their stockout-risk signal (low
             # beginning stock, thin weeks-of-cover), not an impossible sale.
+            #
+            # Stage 3.5 fix: this event is now RECORDED, not silently
+            # folded into `received` -- a diagnostic found the original
+            # version smoothed the emergency top-up away without a trace,
+            # leaving Stage 6 nothing to detect or forecast against.
             shortfall = sold - (beginning + received)
-            if shortfall > 0:
+            near_stockout = shortfall > 0
+            emergency_units = max(shortfall, 0)
+            if near_stockout:
                 received += shortfall
 
             ending = max(beginning + received - sold, 0)
@@ -479,6 +499,8 @@ def generate_inventory_snapshots(rng: np.random.Generator, sku_catalog: pd.DataF
                 schema.INV_RECEIVED: received,
                 schema.INV_SOLD: sold,
                 schema.INV_END: ending,
+                schema.INV_NEAR_STOCKOUT: bool(near_stockout),
+                schema.INV_EMERGENCY_UNITS: int(emergency_units),
             })
             beginning = ending
 

@@ -75,8 +75,17 @@ INV_BEGIN = "beginning_inventory"
 INV_RECEIVED = "units_received"
 INV_SOLD = "units_sold"
 INV_END = "ending_inventory"
+INV_NEAR_STOCKOUT = "near_stockout_flag"  # Stage 3.5: True if this month's planned
+                                           # restock underforecast realized demand and
+                                           # had to be emergency-topped-up to avoid
+                                           # selling more than was ever in stock
+INV_EMERGENCY_UNITS = "emergency_units"   # Stage 3.5: size of that emergency top-up
+                                           # (0 if near_stockout_flag is False)
 
-INVENTORY_SCHEMA = [INV_SKU_ID, INV_MONTH, INV_BEGIN, INV_RECEIVED, INV_SOLD, INV_END]
+INVENTORY_SCHEMA = [
+    INV_SKU_ID, INV_MONTH, INV_BEGIN, INV_RECEIVED, INV_SOLD, INV_END,
+    INV_NEAR_STOCKOUT, INV_EMERGENCY_UNITS,
+]
 
 # ---------------------------------------------------------------------------
 # Operating expenses table (expense category x month grain)

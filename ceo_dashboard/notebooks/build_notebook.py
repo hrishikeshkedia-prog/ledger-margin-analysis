@@ -209,7 +209,9 @@ SKU's stock position in one month):
 | `beginning_inventory` | Units on hand at the start of the month. |
 | `units_received` | Units restocked during the month. |
 | `units_sold` | Units sold during the month (gross, before returns) — reconciles with `orders` grouped by SKU and month. |
-| `ending_inventory` | `beginning_inventory + units_received - units_sold`, floored at 0. Next month's `beginning_inventory` always equals this value — verified in the test suite. |"""
+| `ending_inventory` | `beginning_inventory + units_received - units_sold`, floored at 0. Next month's `beginning_inventory` always equals this value — verified in the test suite. |
+| `near_stockout_flag` | `True` if this month's restock under-forecast realized demand and had to be emergency-topped-up to keep `units_sold` from exceeding what was ever in stock (added in a later data-layer fix — see the recalibration note below). |
+| `emergency_units` | Size of that emergency top-up; `0` whenever `near_stockout_flag` is `False`. |"""
     ),
     md("### Quick sanity check: does this data look like a real fashion brand?"),
     code(

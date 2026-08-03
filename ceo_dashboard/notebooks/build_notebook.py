@@ -1139,17 +1139,193 @@ lifetime assumption, high-return threshold, dead-stock bar, weeks-of-cover
 bands) lives in `src/fashion_config.py`, never hardcoded in `fashion.py`
 -- proven live by rerunning `dead_stock_pct` and `ltv_cac_ratio` against
 `CONSERVATIVE_FASHION_CONFIG` and showing the output genuinely changes
-with zero code edits. 19 new tests (46 total across three stages) cover
-the calibration, every formula, and the config-boundary behavior.
+with zero code edits. 19 new tests cover the calibration, every formula,
+and the config-boundary behavior (this file gained 2 more in Stage 4,
+formalizing the channel/SKU margin-after-CAC allocation into `fashion.py`
+-- see that stage's summary for the current total).
 
 **Stopping here for review before Stage 4** (dashboard / visualizations)."""
     ),
 ]
 
 
+# ===========================================================================
+# STAGE 4 -- Dashboard / Visualizations
+# ===========================================================================
+STAGE_4_CELLS = [
+    md(
+"""---
+## Stage 4 — Dashboard / Visualizations (presentation layer)
+
+**Confirming before building anything:** the numbers below must match the
+Stage 3 verification exactly (28 loss-making SKUs, 1 negative channel,
+47% top-10 revenue share, 9 near-zero SKUs, 152 near-stockout events) --
+if they don't, that means the data drifted since Stage 3 and no chart
+should be built on top of it."""
+    ),
+    code(
+"""from src import dashboard as dv
+
+# Re-verify against a fresh generation -- must match Stage 3 exactly.
+_verify_data = dg.generate_all(seed=42)
+_verify_clean, _verify_log = clean.clean_orders(_verify_data["orders"])
+assert (_verify_log["rows_affected"] == 0).all()
+
+_sku_cac = fashion.sku_margin_after_cac(_verify_clean, _verify_data["marketing_spend"])
+_all_skus = pd.Index(sorted(_verify_data["inventory_snapshots"][schema.INV_SKU_ID].unique()))
+_sku_cac_full = _sku_cac.set_index(schema.SKU_ID)["cm_after_cac"].reindex(_all_skus).fillna(0.0)
+_channel_pnl = fashion.channel_margin_after_cac(_verify_clean, _verify_data["marketing_spend"])
+_ranked, _summary = core.sku_concentration(_verify_clean)
+_econ = core.add_line_economics(_verify_clean)
+_units_by_sku = _econ.groupby(schema.SKU_ID)[schema.QUANTITY].sum().reindex(_all_skus).fillna(0)
+_inv = _verify_data["inventory_snapshots"]
+
+print(f"SKUs loss-making after CAC: {(_sku_cac_full < 0).sum()} of {len(_all_skus)} (expected 28 of 150)")
+print(f"Channels loss-making after CAC: {_channel_pnl['is_loss_making'].sum()} -> "
+      f"{_channel_pnl.loc[_channel_pnl['is_loss_making'], 'channel'].tolist()} (expected 1, Influencer)")
+print(f"Top-10 SKU revenue share: {_summary['top_10_skus_revenue_share']:.1%} (expected ~47%)")
+print(f"SKUs with <=10 units sold: {(_units_by_sku <= 10).sum()} (expected 9)")
+print(f"Near-stockout events: {int(_inv['near_stockout_flag'].sum())} across "
+      f"{_inv.loc[_inv['near_stockout_flag'], 'sku_id'].nunique()} SKUs (expected 152 across 54)")
+
+assert (_sku_cac_full < 0).sum() == 28
+assert _channel_pnl["is_loss_making"].sum() == 1
+assert int(_inv["near_stockout_flag"].sum()) == 152
+print("\\nConfirmed: matches Stage 3 verification exactly. Safe to build charts.")"""
+    ),
+    md(
+"""**Confirmed** — proceeding to the dashboard layer.
+
+### Design rules for every chart below
+
+- **Consume, never recompute.** Every chart calls a `core.py`/`fashion.py`
+  function directly; `src/dashboard.py` never re-derives a KPI from raw
+  order/inventory rows. The two exceptions -- `channel_margin_after_cac`
+  and `sku_margin_after_cac` -- were added to `fashion.py` this stage
+  (not to `dashboard.py`) because they formalize an allocation that had
+  already been duplicated ad hoc three times across the Stage 2/3
+  diagnostics; Stage 5's alert model will reuse the same two functions.
+- **Modular, reusable functions.** Every chart is a `render_*` function in
+  `src/dashboard.py` taking already-computed data and returning a
+  `go.Figure` -- Stage 7 calls the same functions to export a standalone
+  HTML dashboard, so nothing here is a one-off notebook cell.
+- **Consistent risk color-coding.** A fixed validated palette
+  (`dv.CATEGORICAL`, `dv.STATUS`) is used throughout. Status red
+  (`dv.STATUS["critical"]`) is reserved for loss-making SKUs, the
+  loss-making channel, and dead stock -- never reused as an ordinary
+  series color. Channels keep one fixed color across every chart they
+  appear in (`dv.CHANNEL_COLORS`).
+- **One axis per chart, always.** No chart in this stage uses a dual-axis
+  combo (two y-scales sharing an x-axis) -- where two measures differ in
+  unit or scale (e.g. revenue vs. margin %), they're separate panels
+  instead.
+- **A title + a one-line CEO-takeaway caption on every chart**, stating
+  the headline finding in plain language, not just labeling the axes.
+
+The stockout-signal columns added in Stage 3.5 (`near_stockout_flag`,
+`emergency_units`) are deliberately NOT visualized here -- that's Stage
+6's forecast layer; this stage only confirmed they still exist above."""
+    ),
+    md(
+"""**A rendering note:** by default `fig.show()` in a live Jupyter/Colab
+session produces a fully interactive chart (hover tooltips, zoom). Static
+viewers -- GitHub's notebook preview, nbviewer, a PDF export -- don't
+execute the JS that requires, so they'd show a blank cell. Setting the
+renderer to `"png"` below trades interactivity for a plain image that
+renders correctly everywhere this notebook is opened, static or live.
+Delete this cell (or set the renderer back to `"notebook_connected"`) in
+a live session to get interactivity back. (PNG rendering needs Chrome
+available to `kaleido`; if a chart cell errors on a fresh machine, run
+`!kaleido_get_chrome` once first -- Colab and most Jupyter installs
+already have a compatible browser and won't need this.)"""
+    ),
+    code(
+"""import plotly.io as pio
+pio.renderers.default = "png"  # static image, guaranteed to render in GitHub/nbviewer/PDF too"""
+    ),
+    md("### KPI Scorecard"),
+    code(
+"""scorecard_metrics = dv.compute_scorecard_metrics(orders_clean, opex_df, marketing_df, inventory_df)
+fig = dv.render_kpi_scorecard(scorecard_metrics)
+fig.show()"""
+    ),
+    md(
+"""Every number above is a roll-up of a function already built and tested in
+Stages 2-3 -- `compute_scorecard_metrics` (in `src/dashboard.py`) sums or
+ratios existing KPI-table columns; it introduces no new formula. See its
+docstring for exactly which function backs each tile."""
+    ),
+    md("### Revenue & Margin Trend"),
+    code(
+"""fig = dv.render_revenue_margin_trend(orders_clean)
+fig.show()"""
+    ),
+    md("### Returns Margin Bridge"),
+    code(
+"""fig = dv.render_returns_bridge(orders_clean)
+fig.show()"""
+    ),
+    md("### Margin by SKU"),
+    code(
+"""fig = dv.render_margin_by_sku(orders_clean, marketing_df, total_sku_count=inventory_df[schema.INV_SKU_ID].nunique())
+fig.show()"""
+    ),
+    md("### Channel Economics"),
+    code(
+"""fig = dv.render_channel_view(orders_clean, marketing_df)
+fig.show()"""
+    ),
+    md("### Inventory Health"),
+    code(
+"""fig = dv.render_inventory_view(inventory_df)
+fig.show()"""
+    ),
+    md("### Cohort Retention"),
+    code(
+"""fig = dv.render_cohort_heatmap(orders_clean)
+fig.show()"""
+    ),
+    md(
+"""---
+## Stage 4 summary
+
+Confirmed the notebook's data matches the Stage 3 verification exactly
+(28 loss-making SKUs, 1 negative channel, 47% top-10 revenue share, 9
+near-zero SKUs, 152 near-stockout events) before building anything.
+Built seven reusable, parameterized chart functions in `src/dashboard.py`
+-- a KPI scorecard, revenue & margin trend, a returns-margin bridge
+waterfall, margin-by-SKU (best/worst panels), channel economics (CAC and
+payback, with the loss-making Influencer channel in status red), inventory
+health (sell-through trend and a red-flagged dead-stock tail), and a
+cohort-retention heatmap. Every chart consumes existing `core.py`/
+`fashion.py` output; the only new calculation logic added this stage --
+`channel_margin_after_cac` and `sku_margin_after_cac` -- went into
+`fashion.py`, not the presentation layer, formalizing an allocation
+already duplicated three times in earlier diagnostics (Stage 5's alert
+model will reuse both). A validated, CVD-safe color palette is used
+throughout with status red reserved exclusively for risk. Getting the
+layout right took real iteration -- an initial draft's caption placement
+formula had a real bug (it reserved the correct total margin but
+positioned the caption text to start at the same height as the axis tick
+labels instead of below them), caught by rendering every chart to a PNG
+and visually inspecting it rather than trusting the code alone; also
+fixed along the way: zero-value dead-stock bars that were invisible at
+true-zero width, a shared subplot bottom-margin collision, and a mismatched
+SKU-count denominator (147 vs. the correct 150-catalog figure) in the
+margin-by-SKU caption. 13 new tests (62 total across four stages) cover
+every render function, the color-coding rules, and that the scorecard's
+numbers trace back to existing KPI functions.
+
+**Stopping here for review before Stage 5** (the margin-risk alert model,
+which will reuse `fashion.channel_margin_after_cac` and
+`fashion.sku_margin_after_cac` directly)."""
+    ),
+]
+
+
 def build():
     nb = nbf.v4.new_notebook()
-    nb["cells"] = STAGE_1_CELLS + STAGE_2_CELLS + STAGE_3_CELLS
+    nb["cells"] = STAGE_1_CELLS + STAGE_2_CELLS + STAGE_3_CELLS + STAGE_4_CELLS
     nb["metadata"] = {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.11"},

@@ -2,6 +2,7 @@ pandas>=2.2
 numpy>=1.26
 matplotlib>=3.8
 plotly>=5.20
+kaleido>=0.2  # static PNG rendering for charts, so they render in GitHub/nbviewer/PDF too
 scikit-learn>=1.4
 nbformat>=5.10
 nbclient>=0.10

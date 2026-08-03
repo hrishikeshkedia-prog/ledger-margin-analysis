@@ -133,6 +133,82 @@ def cac_summary_by_channel(cleaned_orders_df: pd.DataFrame, marketing_df: pd.Dat
     return summary
 
 
+def channel_margin_after_cac(cleaned_orders_df: pd.DataFrame, marketing_df: pd.DataFrame) -> pd.DataFrame:
+    """Full-window channel P&L: does a channel's spend actually pay for
+    itself in contribution-margin terms?
+
+    Formula: cm_after_cac = (total Contribution Margin from every order
+    attributed to a channel) - (total spend on that channel). This is a
+    different lens from CAC (cost per new customer) or ROAS (revenue per
+    rupee spent) -- a channel can have positive ROAS and a reasonable CAC
+    while still not covering its own cost once product/fulfillment
+    economics are netted in, which is exactly what this catches.
+    Business question: which channels are net contributors to profit, and
+    which are a drag once their full cost is weighed against what their
+    orders actually earned? This formalizes the calculation first used
+    (identically, ad hoc) in the Stage 2 and Stage 3 diagnostics -- the
+    same allocation, now a reusable function so Stage 4 (red-flagging) and
+    Stage 5 (alerts) share one definition instead of three copies.
+    """
+    econ = core.add_line_economics(cleaned_orders_df)
+    orders_only = econ.drop_duplicates(subset=schema.ORDER_ID)
+    orders_by_channel = orders_only.groupby(schema.MARKETING_CHANNEL).size()
+    spend_by_channel = marketing_df.groupby(schema.SPEND_CHANNEL)[schema.SPEND_AMOUNT].sum()
+    cm_by_channel = econ.groupby(schema.MARKETING_CHANNEL)["contribution_margin_line"].sum()
+
+    out = pd.DataFrame({
+        "contribution_margin": cm_by_channel,
+        "orders": orders_by_channel,
+        "spend": spend_by_channel,
+    }).fillna(0)
+    out.index.name = "channel"
+    out["cm_after_cac"] = out["contribution_margin"] - out["spend"]
+    out["is_loss_making"] = out["cm_after_cac"] < 0
+    return out.reset_index()
+
+
+def sku_margin_after_cac(cleaned_orders_df: pd.DataFrame, marketing_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-SKU contribution margin after a pro-rata share of channel CAC
+    is allocated onto it.
+
+    Formula: each channel's per-order spend (total channel spend / total
+    orders credited to that channel) is allocated to every line of an
+    order attributed to that channel, split across the order's lines by
+    each line's share of the order's net revenue (evenly split if the
+    order's net revenue is zero, e.g. every line was returned).
+    cm_after_cac (per SKU) = SKU's total contribution margin - SKU's total
+    allocated CAC. Only SKUs with at least one order line appear (this
+    function only has `cleaned_orders_df` to group by; a SKU with zero
+    sales has no line to attribute a category or a CAC share to). A
+    caller wanting the full catalog including zero-sales SKUs should
+    reindex this output against `inventory_snapshots`'s SKU list, filling
+    missing SKUs with cm_after_cac = 0 -- exactly as the Stage 3 notebook
+    diagnostic did before this function existed.
+    Business question: which specific products are actually profitable
+    once a fair share of what it cost to acquire the customers who bought
+    them is counted, not just after returns and fulfillment cost? This
+    formalizes the calculation first used (identically, ad hoc) in the
+    Stage 2 and Stage 3 diagnostics -- see `channel_margin_after_cac` for
+    why it's now a shared function instead of three copies.
+    """
+    econ = core.add_line_economics(cleaned_orders_df)
+    channel_pnl = channel_margin_after_cac(cleaned_orders_df, marketing_df).set_index("channel")
+    cac_cost_per_order = channel_pnl["spend"] / channel_pnl["orders"].replace(0, np.nan)
+
+    order_net_rev = econ.groupby(schema.ORDER_ID)["net_revenue_line"].transform("sum")
+    line_count = econ.groupby(schema.ORDER_ID)[schema.ORDER_ID].transform("count")
+    line_share = np.where(order_net_rev > 0, econ["net_revenue_line"] / order_net_rev, 1 / line_count)
+    allocated_cac = econ[schema.MARKETING_CHANNEL].map(cac_cost_per_order).fillna(0) * line_share
+    cm_after_cac_line = econ["contribution_margin_line"] - allocated_cac
+
+    out = econ.assign(cm_after_cac_line=cm_after_cac_line).groupby([schema.SKU_ID, schema.CATEGORY]).agg(
+        contribution_margin=("contribution_margin_line", "sum"),
+        cm_after_cac=("cm_after_cac_line", "sum"),
+    ).reset_index()
+    out["is_loss_making"] = out["cm_after_cac"] < 0
+    return out.sort_values("cm_after_cac").reset_index(drop=True)
+
+
 def roas_by_channel(cleaned_orders_df: pd.DataFrame, marketing_df: pd.DataFrame) -> pd.DataFrame:
     """Monthly Return on Ad Spend (ROAS) by channel.
 

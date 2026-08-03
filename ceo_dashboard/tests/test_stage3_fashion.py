@@ -25,14 +25,28 @@ def cleaned(generated):
 # ---------------------------------------------------------------------------
 
 def test_at_least_one_channel_is_loss_making_after_cac(cleaned, generated):
+    result = fashion.channel_margin_after_cac(cleaned, generated["marketing_spend"])
+    assert result["is_loss_making"].sum() >= 1
+    assert "Influencer" in result.loc[result["is_loss_making"], "channel"].tolist()
+
+
+def test_channel_margin_after_cac_matches_manual_calc(cleaned, generated):
+    """Cross-check the new shared function against an independent
+    from-scratch calculation, to catch a regression in the allocation."""
     econ = core.add_line_economics(cleaned)
     marketing = generated["marketing_spend"]
-    orders_only = econ.drop_duplicates(subset=schema.ORDER_ID)
     cm_by_channel = econ.groupby(schema.MARKETING_CHANNEL)["contribution_margin_line"].sum()
     spend_by_channel = marketing.groupby(schema.SPEND_CHANNEL)[schema.SPEND_AMOUNT].sum()
-    cm_after_cac = cm_by_channel.reindex(spend_by_channel.index).fillna(0) - spend_by_channel
-    assert (cm_after_cac < 0).sum() >= 1
-    assert "Influencer" in cm_after_cac[cm_after_cac < 0].index
+    expected = (cm_by_channel.reindex(spend_by_channel.index).fillna(0) - spend_by_channel).sort_index()
+
+    result = fashion.channel_margin_after_cac(cleaned, marketing).set_index("channel")["cm_after_cac"].sort_index()
+    np.testing.assert_allclose(result.to_numpy(), expected.to_numpy())
+
+
+def test_sku_margin_after_cac_flags_known_loss_makers(cleaned, generated):
+    result = fashion.sku_margin_after_cac(cleaned, generated["marketing_spend"])
+    assert result["is_loss_making"].sum() >= 20  # was verified at 28 of 150 (of 147 pre-reindex)
+    assert "TOP-013" in result.loc[result["is_loss_making"], "sku_id"].tolist()
 
 
 def test_a_meaningful_number_of_skus_are_loss_making(cleaned):

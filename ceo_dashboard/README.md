@@ -45,6 +45,7 @@ ceo_dashboard/
     core.py                 Universal Core KPI engine (Layer 1, industry-agnostic)
     fashion_config.py       Layer 2 config: every fashion-specific threshold/assumption
     fashion.py               D2C Fashion module (Layer 2), built on core.py, config-driven
+    dashboard.py             presentation layer (Stage 4): reusable plotly chart functions
   data/synthetic/         generated CSVs (orders, marketing_spend, inventory_snapshots, opex)
   notebooks/
     ceo_dashboard.ipynb   the deliverable notebook, built in stages
@@ -90,6 +91,30 @@ These were not the initial design -- a Stage 2/3 diagnostic caught a
 uniform-demand, uniformly-healthy-margin, flat-retention first pass and
 the generator was recalibrated in response (see `data_generator.py`'s
 module docstring for the full rationale and parameters).
+
+## Dashboard / visualizations
+
+`src/dashboard.py` is a presentation-only layer: every chart function
+consumes `core.py`/`fashion.py` output and never redefines a KPI. (Two
+functions -- `fashion.channel_margin_after_cac` and
+`fashion.sku_margin_after_cac` -- were added to `fashion.py`, not
+`dashboard.py`, to formalize a contribution-margin-after-CAC allocation
+that had been duplicated ad hoc across earlier diagnostics; Stage 5's
+alert model reuses both.) Seven reusable, parameterized `render_*`
+functions return a `plotly.graph_objects.Figure` each: a KPI scorecard, a
+revenue & margin trend (three single-axis panels, never dual-axis), a
+returns-margin-bridge waterfall, margin-by-SKU (best/worst panels, loss-
+makers in status red), channel economics (CAC and payback, the loss-
+making channel flagged red), inventory health (sell-through trend plus a
+red-flagged dead-stock tail), and a cohort-retention heatmap. Colors come
+from a fixed, validated categorical/status palette -- status red is
+reserved exclusively for risk (loss-making SKU/channel, dead stock) and
+never reused as an ordinary series color; channels keep one fixed color
+across every chart. The notebook sets `plotly.io.renderers.default =
+"png"` before rendering so charts show up as static images everywhere
+this notebook is opened (GitHub, nbviewer, PDF), not only in a live
+Jupyter/Colab session where the default interactive renderer would leave
+static viewers with a blank cell.
 
 ## Swappable data loading
 

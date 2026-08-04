@@ -55,6 +55,10 @@ ceo_dashboard/
     build_notebook.py     builds the notebook programmatically with nbformat
     ceo_dashboard.html    the standalone presentation file (Stage 7) -- open this to present
     build_dashboard_html.py  regenerates ceo_dashboard.html
+    interactive_dashboard.html  live, in-browser, works-for-any-business version -- see below
+    interactive_dashboard_template.html  source template build_interactive_dashboard.py fills in
+    build_interactive_dashboard.py  regenerates interactive_dashboard.html
+    sample_data/diy_kits_transactions.csv  non-fashion sample CSV for the graceful-degradation demo
   tests/                  pytest suite against the synthetic data
 ```
 
@@ -200,6 +204,57 @@ BROWSER_PATH=/path/to/chrome python notebooks/build_dashboard_html.py
 (`BROWSER_PATH` is only needed because rendering the embedded PNGs uses
 kaleido, which needs a real Chrome/Chromium binary and doesn't bundle one
 in every environment.)
+
+## Interactive dashboard (live, in-browser, works for any goods business)
+
+`notebooks/interactive_dashboard.html` is a second, alongside deliverable --
+it does not replace or modify anything in the Stage 1-7 pipeline above. It
+reproduces that pipeline's exact visual identity (layout, palette,
+typography, captions, risk color-coding) but renders every chart **live**,
+client-side, from hand-built SVG instead of a static PNG, and lets a user
+load their own transactions CSV so the same dashboard works for any
+goods-selling business, not only D2C fashion. No server, no external
+scripts -- opens offline, double-clicked from disk.
+
+- **Loads with the bundled synthetic fashion dataset by default**, looking
+  the same as the static export, but every number recomputes if you edit
+  the data.
+- **Column mapping, surfaced to the user**: upload a transactions CSV
+  (date, product, quantity, revenue, cost, plus optional returns /
+  customer ID / marketing channel) and the page auto-guesses which of your
+  headers map to which role -- the same swappable-loader concept as
+  `data_loader.py`, just exposed as UI instead of a Python dict. Two more
+  optional CSV uploads (marketing spend, inventory snapshots) unlock
+  channel economics and inventory health respectively.
+- **Graceful degradation, never a faked panel**: Returns Margin Bridge,
+  Channel Economics, Cohort Retention, and Inventory Health each render
+  only if their required columns are mapped; otherwise they're hidden
+  cleanly with a note naming exactly what column would unlock them. The
+  KPI scorecard and executive summary shrink to their universal-core tiles
+  (revenue, gross margin, top-10 concentration) the same way. Try
+  `notebooks/sample_data/diy_kits_transactions.csv` (a non-fashion,
+  synthetic DIY-craft-kit dataset with no returns/marketing/customer-ID
+  columns) via the Transactions file picker to see this live.
+- **Editable data view**: a paginated, in-browser-editable table of the
+  loaded transactions -- tweak any cell and click "Recompute" to see every
+  chart redraw from the edited data, entirely client-side.
+- Every formula is a generalized JS port of `core.py`/`fashion.py`'s
+  formulas (documented inline in the page's own `<script>`, same "no black
+  boxes" rule as the Python engine) -- collapsed to a single generic "cost"
+  bucket per line since a universal CSV can't be assumed to separate COGS
+  from fulfillment cost the way the fashion-specific schema does. The
+  page's own Honest Limitations footer states exactly where this
+  simplified engine's numbers diverge from the Stage 1-7 pipeline's.
+
+Regenerate it with:
+
+```
+python notebooks/build_interactive_dashboard.py
+```
+
+(No `BROWSER_PATH`/kaleido needed here -- there's nothing to rasterize at
+build time; the build step only bakes the bundled CSVs into the page as
+its default dataset.)
 
 ## Swappable data loading
 

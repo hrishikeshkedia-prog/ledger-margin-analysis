@@ -1,0 +1,1509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CEO Cost &amp; Margin Dashboard — Interactive</title>
+<style>
+:root {
+  --ink-primary: #0b0b0b; --ink-secondary: #52514e; --ink-muted: #898781;
+  --surface: #fcfcfb; --page: #f4f3f0; --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
+  --critical: #d03b3b; --warning: #fab219; --good: #0ca30c; --accent: #2a78d6;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink-primary); background: var(--page); line-height: 1.5;
+}
+.page { max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px; }
+header.hero { padding: 40px 0 24px; border-bottom: 1px solid var(--border); margin-bottom: 32px; }
+header.hero h1 { margin: 0 0 4px; font-size: 32px; }
+header.hero .subtitle { margin: 0 0 16px; color: var(--ink-secondary); font-size: 16px; }
+.disclaimer {
+  display: inline-block; background: #fff7e8; border: 1px solid var(--warning);
+  color: #6b4d00; padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 600;
+}
+section { margin-bottom: 48px; }
+section h2 {
+  font-size: 22px; margin: 0 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--ink-primary);
+}
+section h3 { font-size: 17px; margin: 24px 0 12px; color: var(--ink-secondary); }
+.finding-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.finding-card {
+  background: var(--surface); border: 1px solid var(--grid); border-radius: 10px; padding: 18px;
+  border-left: 4px solid var(--accent);
+}
+.finding-card.critical { border-left-color: var(--critical); }
+.finding-card.warning { border-left-color: var(--warning); }
+.finding-card .headline { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.finding-card .headline.critical-text { color: var(--critical); }
+.finding-card .detail { font-size: 13px; color: var(--ink-secondary); }
+.chart-block { background: var(--surface); border: 1px solid var(--grid); border-radius: 10px;
+  padding: 16px 16px 14px; margin-bottom: 20px; }
+.chart-title { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
+.chart-caption { font-size: 12px; color: var(--ink-secondary); margin: 10px 0 0; max-width: 100ch; }
+.panel-row { display: grid; gap: 20px; }
+.panel-row.cols-2 { grid-template-columns: 1fr 1fr; }
+.panel-row.cols-2.uneven { grid-template-columns: 0.72fr 1fr; }
+.subplot-title { font-size: 13px; font-weight: 600; text-align: center; color: var(--ink-primary); margin-bottom: 4px; }
+svg.chart-svg { width: 100%; display: block; overflow: visible; }
+.chart-svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink-primary); }
+.chart-svg .tick-label { font-size: 11px; fill: var(--ink-muted); }
+.chart-svg .bar-label { font-size: 11px; fill: var(--ink-primary); }
+.chart-svg .axis-title { font-size: 12px; fill: var(--ink-secondary); }
+table.data-table { width: 100%; border-collapse: collapse; background: var(--surface);
+  border: 1px solid var(--grid); border-radius: 8px; overflow: hidden; font-size: 13px; }
+table.data-table th { text-align: left; background: #f0efec; padding: 10px 12px;
+  border-bottom: 1px solid var(--grid); color: var(--ink-secondary); font-weight: 600; }
+table.data-table td { padding: 9px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data-table tbody tr:last-child td { border-bottom: none; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
+  white-space: nowrap; }
+.badge-critical { background: #fbeaea; color: var(--critical); }
+.badge-warning { background: #fff4de; color: #8a5a00; }
+.table-note { font-size: 13px; color: var(--ink-muted); margin-top: 8px; }
+footer.limitations { background: #fff7e8; border: 1px solid var(--warning); border-radius: 10px;
+  padding: 24px 28px; }
+footer.limitations h2 { border: none; margin-bottom: 12px; }
+footer.limitations ul { margin: 0; padding-left: 20px; }
+footer.limitations li { margin-bottom: 10px; }
+.build-note { text-align: center; color: var(--ink-muted); font-size: 12px; margin-top: 32px; }
+
+/* ---- Data & mapping panel (new for the interactive rebuild) ---- */
+.data-panel { background: var(--surface); border: 1px solid var(--grid); border-radius: 10px; padding: 20px 24px; }
+.upload-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 18px; }
+.upload-card { border: 1px dashed var(--grid); border-radius: 8px; padding: 14px; background: var(--page); }
+.upload-card h4 { margin: 0 0 4px; font-size: 14px; }
+.upload-card p { margin: 0 0 10px; font-size: 12px; color: var(--ink-secondary); }
+.upload-card input[type=file] { font-size: 12px; max-width: 100%; }
+.upload-card .filename { font-size: 12px; color: var(--accent); margin-top: 6px; word-break: break-all; }
+.btn { font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--grid);
+  background: var(--surface); cursor: pointer; color: var(--ink-primary); }
+.btn:hover { background: #f0efec; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: #2166ba; }
+.btn-small { font-size: 12px; padding: 4px 10px; }
+.mapping-table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 13px; }
+.mapping-table th, .mapping-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid); }
+.mapping-table select, .mapping-table input[type=text] { font-size: 13px; padding: 4px 6px; border: 1px solid var(--grid);
+  border-radius: 4px; min-width: 180px; background: #fff; }
+.mapping-table .req { color: var(--critical); font-weight: 700; margin-left: 3px; }
+.mapping-table .role-note { color: var(--ink-muted); font-size: 11px; display: block; margin-top: 2px; }
+.toggle-row { font-size: 12px; color: var(--ink-secondary); margin: 4px 0 12px; }
+.toggle-row label { margin-right: 18px; }
+.action-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.status-msg { font-size: 13px; padding: 6px 0; }
+.status-msg.error { color: var(--critical); font-weight: 600; }
+.status-msg.ok { color: var(--good); font-weight: 600; }
+.hidden-note { background: #f0efec; border: 1px solid var(--grid); border-radius: 8px; padding: 14px 18px; font-size: 13px; color: var(--ink-secondary); }
+.hidden-note strong { color: var(--ink-primary); }
+.hidden-note ul { margin: 8px 0 0; padding-left: 20px; }
+.aux-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--grid); }
+.editable-table-wrap { overflow-x: auto; }
+table.editable-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.editable-table th { text-align: left; background: #f0efec; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+table.editable-table td { padding: 3px 6px; border-bottom: 1px solid var(--grid); }
+table.editable-table input[type=text], table.editable-table input[type=number] {
+  width: 100%; font-size: 12px; padding: 3px 4px; border: 1px solid transparent; border-radius: 3px; background: transparent;
+}
+table.editable-table input:hover, table.editable-table input:focus { border-color: var(--grid); background: #fff; }
+table.editable-table input[type=checkbox] { transform: scale(1.1); }
+.pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--ink-secondary); }
+.section-collapsed .collapsible-body { display: none; }
+.collapse-toggle { cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; user-select: none; }
+@media (max-width: 800px) {
+  .panel-row.cols-2, .panel-row.cols-2.uneven { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="hero">
+    <h1>CEO Cost &amp; Margin Dashboard</h1>
+    <p class="subtitle" id="hero-subtitle">Live, interactive, runs entirely in your browser — no server, no upload leaves this page.</p>
+    <div class="disclaimer" id="disclaimer-box">⚠️ Loaded with a BUNDLED SYNTHETIC D2C fashion dataset — generated by a seeded
+      data generator for a portfolio project, not sourced from any real business. Upload your own CSV below to replace it.</div>
+  </header>
+
+  <section id="sec-data">
+    <h2>Data</h2>
+    <div class="data-panel">
+      <p style="margin-top:0;font-size:13px;color:var(--ink-secondary);">
+        Every chart below is computed <strong>live, in this browser</strong>, from the table on the left.
+        Swap in your own transactions export, map its columns to the roles the engine needs, and every KPI
+        and chart recomputes — nothing is precomputed or baked in except the sample data this page loads with.
+      </p>
+
+      <div class="upload-grid">
+        <div class="upload-card">
+          <h4>Transactions <span class="req">*</span> required</h4>
+          <p>One row per order line: date, product, quantity, revenue, cost. This is the only file every
+            panel depends on.</p>
+          <input type="file" id="file-transactions" accept=".csv">
+          <div class="filename" id="filename-transactions">Using bundled sample: D2C fashion orders (12 months)</div>
+          <div style="margin-top:8px;"><button class="btn btn-small" id="btn-reset-transactions" type="button">Reset to bundled fashion sample</button></div>
+          <p style="font-size:11px;color:var(--ink-muted);margin:6px 0 0;">Want to see graceful degradation on a non-fashion business? Use the file
+            picker above to load <code>sample_data/diy_kits_transactions.csv</code> (bundled alongside this
+            page) -- a DIY craft-kit business with no returns, marketing, or customer-ID columns.</p>
+        </div>
+        <div class="upload-card">
+          <h4>Marketing Spend (optional)</h4>
+          <p>Month, channel, spend. Unlocks the Channel Economics panel when paired with a mapped
+            "Marketing Channel" column above.</p>
+          <input type="file" id="file-marketing" accept=".csv">
+          <div class="filename" id="filename-marketing">Using bundled sample: 5-channel monthly spend</div>
+        </div>
+        <div class="upload-card">
+          <h4>Inventory Snapshots (optional)</h4>
+          <p>SKU, month, beginning/received/sold/ending stock. Unlocks the Inventory Health panel — this
+            can never be derived from a transactions export alone.</p>
+          <input type="file" id="file-inventory" accept=".csv">
+          <div class="filename" id="filename-inventory">Using bundled sample: 150-SKU monthly stock</div>
+        </div>
+      </div>
+
+      <div id="mapping-section">
+        <h3 style="margin-top:0;">Column mapping — Transactions</h3>
+        <table class="mapping-table" id="mapping-table"></table>
+        <div class="toggle-row">
+          <label><input type="checkbox" id="toggle-revenue-per-unit"> Revenue column is PER UNIT (multiply by quantity)</label>
+          <label><input type="checkbox" id="toggle-cost-per-unit"> Cost column is PER UNIT (multiply by quantity)</label>
+        </div>
+        <h3 id="mapping-marketing-title">Column mapping — Marketing Spend</h3>
+        <table class="mapping-table" id="mapping-table-marketing"></table>
+        <h3 id="mapping-inventory-title">Column mapping — Inventory Snapshots</h3>
+        <table class="mapping-table" id="mapping-table-inventory"></table>
+        <div class="action-row">
+          <button class="btn btn-primary" id="btn-apply" type="button">Apply mapping &amp; redraw dashboard</button>
+          <span class="status-msg" id="mapping-status"></span>
+        </div>
+      </div>
+
+      <div class="aux-block">
+        <span class="collapse-toggle" id="toggle-editable">▸ Edit the transactions data in-browser (what-if tweaking)</span>
+        <div class="collapsible-body" id="editable-body" style="display:none;margin-top:12px;">
+          <div class="editable-table-wrap">
+            <table class="editable-table" id="editable-table"></table>
+          </div>
+          <div class="pager">
+            <button class="btn btn-small" id="btn-prev-page" type="button">◀ Prev</button>
+            <span id="page-indicator"></span>
+            <button class="btn btn-small" id="btn-next-page" type="button">Next ▶</button>
+            <button class="btn btn-small" id="btn-add-row" type="button" style="margin-left:16px;">+ Add row</button>
+            <button class="btn btn-primary btn-small" id="btn-recompute" type="button">Recompute dashboard from edits</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-hidden-note" style="display:none;">
+    <div class="hidden-note" id="hidden-note-body"></div>
+  </section>
+
+  <section>
+    <h2>Executive Summary</h2>
+    <div class="finding-grid" id="exec-summary"></div>
+  </section>
+
+  <section>
+    <h2>Performance &amp; Margin</h2>
+    <div class="chart-block" id="panel-scorecard"></div>
+    <div class="chart-block" id="panel-trend"></div>
+  </section>
+
+  <section id="sec-returns">
+    <h2>Returns Impact</h2>
+    <div class="chart-block" id="panel-returns"></div>
+  </section>
+
+  <section>
+    <h2>SKU &amp; Channel Economics</h2>
+    <div class="chart-block" id="panel-margin-sku"></div>
+    <div class="chart-block" id="panel-channel" style="display:none;"></div>
+    <div class="chart-block" id="panel-cohort" style="display:none;"></div>
+  </section>
+
+  <section id="sec-inventory">
+    <h2>Inventory Health</h2>
+    <div class="chart-block" id="panel-inventory"></div>
+  </section>
+
+  <footer class="limitations">
+    <h2>Honest Limitations</h2>
+    <ul>
+      <li><strong>This is a rebuilt, simplified analytics engine, not the original Python pipeline.</strong>
+        It runs entirely client-side from a single generic "cost" column per transaction rather than the
+        original's separate COGS / shipping / payment-fee breakdown, so numbers are directionally
+        consistent with (not always numerically identical to) the Stage 1-7 notebook pipeline in this
+        repository, which remains the source of truth for exact figures.</li>
+      <li><strong>Returns, if mapped, are treated as fully reversing both revenue and cost</strong> on that
+        line. The original pipeline additionally keeps a non-refundable shipping/payment-fee cost even on
+        a return; this simplified engine does not model that distinction.</li>
+      <li><strong>"After marketing cost" allocation treats every transaction row as its own purchase
+        event</strong> (spend ÷ rows-per-channel, charged flat to each row), since this tool has no
+        order-ID concept the way the original per-order-line allocation does. For orders with more than
+        one line item, this over-charges each line slightly -- directionally correct, not cent-for-cent
+        identical to the Stage 1-7 pipeline.</li>
+      <li><strong>Cohort retention, dead-stock, and channel-CAC thresholds use fixed default assumptions</strong>
+        (6-month cohort window, 3-months-available / 15%-sell-through dead-stock bar, 3.5 assumed
+        customer-lifetime orders) baked into this page's code, not exposed as UI controls.</li>
+    </ul>
+  </footer>
+
+  <p class="build-note" id="build-note">Built from notebooks/interactive_dashboard_template.html via
+    notebooks/build_interactive_dashboard.py. Every chart is computed live in your browser from the
+    table above -- nothing here is a precomputed image.</p>
+
+</div>
+
+<script id="default-data-json" type="application/json">__DEFAULT_DATA_JSON__</script>
+<script>
+"use strict";
+/* =============================================================================
+   CEO Cost & Margin Dashboard -- Interactive rebuild.
+
+   Everything below runs client-side, no external requests, no build step at
+   runtime. It re-implements (in a deliberately generalized, "any goods
+   business" form) the same formulas documented in this repo's src/core.py
+   and src/fashion.py -- every function here states its formula in a comment,
+   same "no black boxes" rule as the Python engine.
+   ============================================================================= */
+
+const DEFAULT_DATA = JSON.parse(document.getElementById('default-data-json').textContent);
+
+const COLORS = {
+  categorical: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
+  status: { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" },
+  ink: { primary: "#0b0b0b", secondary: "#52514e", muted: "#898781" },
+  surface: "#fcfcfb", grid: "#e1e0d9", baseline: "#c3c2b7",
+  sequentialBlue: ["#cde2fb", "#9ec5f4", "#5598e7", "#2a78d6", "#184f95"],
+};
+const KNOWN_CHANNEL_COLORS = {
+  "Instagram Ads": COLORS.categorical[0], "Google Ads": COLORS.categorical[1],
+  "Influencer": COLORS.categorical[2], "Affiliate": COLORS.categorical[3], "Organic/Email": COLORS.categorical[4],
+};
+function colorForChannel(channel, allChannels) {
+  if (KNOWN_CHANNEL_COLORS[channel]) return KNOWN_CHANNEL_COLORS[channel];
+  const idx = allChannels.indexOf(channel);
+  return COLORS.categorical[idx % COLORS.categorical.length];
+}
+
+// Config constants (fixed defaults, documented -- mirrors fashion_config.py's role:
+// every business judgment call lives here, named and justified, never hardcoded inline below)
+const CONFIG = {
+  cohortWindowMonths: 6,          // how many months of cohort retention to display
+  deadStockMinMonths: 3,          // a SKU needs this many months on record before it can be judged "dead"
+  deadStockMaxSellThrough: 0.15,  // <= this lifetime sell-through, once eligible, is flagged dead stock
+  ltvAssumedLifetimeOrders: 3.5,  // assumed repeat-purchase multiple used for the LTV:CAC scorecard tile
+  returnsWarningThreshold: 0.20,  // scorecard flags Returns Cost % red above this
+  ltvCacWarningThreshold: 3.0,    // scorecard flags LTV:CAC red below this
+  deadStockWarningThreshold: 0.05,// scorecard flags Dead-Stock % red above this
+};
+
+/* =============================================================================
+   1. Small utilities: number formatting, CSV parsing, date helpers, groupBy
+   ============================================================================= */
+
+function commas(n) {
+  if (n == null || !isFinite(n)) return "–";
+  const neg = n < 0; n = Math.abs(Math.round(n));
+  let s = String(n), out = "";
+  while (s.length > 3) { out = "," + s.slice(-3) + out; s = s.slice(0, -3); }
+  out = s + out;
+  return (neg ? "-" : "") + out;
+}
+function fmtMoney0(v) { return isFinite(v) ? "₹" + commas(v) : "–"; }
+function fmtCr(v) { return isFinite(v) ? "₹" + (v / 1e7).toFixed(2) + " Cr" : "–"; }
+function fmtL(v) { return isFinite(v) ? "₹" + (v / 1e5).toFixed(1) + "L" : "–"; }
+function fmtPct0(v) { return isFinite(v) ? Math.round(v * 100) + "%" : "–"; }
+function fmtPct1(v) { return isFinite(v) ? (v * 100).toFixed(1) + "%" : "–"; }
+
+function toNumber(v) {
+  if (v == null) return NaN;
+  if (typeof v === "number") return v;
+  const s = String(v).trim().replace(/,/g, "");
+  if (s === "") return NaN;
+  return Number(s);
+}
+function toBool(v) {
+  if (v == null) return false;
+  if (typeof v === "boolean") return v;
+  const s = String(v).trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "y";
+}
+function parseDate(s) {
+  if (!s) return null;
+  const str = String(s).trim();
+  let d = new Date(str.length <= 10 ? str + "T00:00:00" : str);
+  if (isNaN(d.getTime())) d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+function monthKey(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+function monthOffset(fromMonth, toMonth) {
+  const [fy, fm] = fromMonth.split("-").map(Number);
+  const [ty, tm] = toMonth.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm);
+}
+function groupBy(arr, keyFn) {
+  const out = new Map();
+  for (const item of arr) {
+    const k = keyFn(item);
+    if (!out.has(k)) out.set(k, []);
+    out.get(k).push(item);
+  }
+  return out;
+}
+function sum(arr, fn) { let s = 0; for (const x of arr) s += fn(x); return s; }
+function sortedKeys(map) { return Array.from(map.keys()).sort(); }
+
+// Minimal RFC4180-ish CSV parser: handles quoted fields, embedded commas/newlines, "" escapes.
+function parseCSV(text) {
+  const rows = [];
+  let i = 0, field = "", row = [], inQuotes = false;
+  const n = text.length;
+  const pushField = () => { row.push(field); field = ""; };
+  const pushRow = () => { rows.push(row); row = []; };
+  while (i < n) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ",") { pushField(); i++; continue; }
+    if (c === "\r") { i++; continue; }
+    if (c === "\n") { pushField(); pushRow(); i++; continue; }
+    field += c; i++;
+  }
+  if (field.length || row.length) { pushField(); pushRow(); }
+  while (rows.length && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === "") rows.pop();
+  const headers = (rows.shift() || []).map(h => h.trim());
+  const objs = rows.map(r => { const o = {}; headers.forEach((h, idx) => o[h] = r[idx]); return o; });
+  return { headers, rows: objs };
+}
+
+/* =============================================================================
+   2. Column-mapping roles (the swappable-loader concept from Stage 1, surfaced
+      to the user instead of a Python dict) + auto-guessing from headers.
+   ============================================================================= */
+
+const TXN_ROLES = [
+  { key: "date", label: "Order Date", required: true, guesses: ["date", "order_date", "txn_date", "purchase_date", "transaction_date"] },
+  { key: "sku", label: "Product / SKU", required: true, guesses: ["sku", "sku_id", "product", "product_code", "product_id", "item"] },
+  { key: "category", label: "Category", required: false, guesses: ["category", "product_group", "product_category", "type", "group"] },
+  { key: "quantity", label: "Quantity", required: true, guesses: ["quantity", "qty", "units", "units_sold"] },
+  { key: "revenue", label: "Revenue", required: true, guesses: ["revenue", "line_revenue", "sales", "amount", "unit_price", "net_revenue"], note: "This row's revenue (or check the per-unit box below)" },
+  { key: "cost", label: "Cost", required: true, guesses: ["cost", "line_cost", "cogs", "unit_cogs", "cost_of_goods"], note: "This row's cost of goods (or check the per-unit box below)" },
+  { key: "returns", label: "Returned? (optional)", required: false, guesses: ["is_return", "returned", "return_flag", "was_returned"] },
+  { key: "customerId", label: "Customer ID (optional)", required: false, guesses: ["customer_id", "customer", "cust_id", "buyer_id"] },
+  { key: "channel", label: "Marketing Channel (optional)", required: false, guesses: ["marketing_channel", "channel", "source", "utm_source"] },
+];
+const MKT_ROLES = [
+  { key: "month", label: "Month", required: false, guesses: ["month", "period"] },
+  { key: "channel", label: "Channel", required: true, guesses: ["channel", "marketing_channel", "source"] },
+  { key: "spend", label: "Spend", required: true, guesses: ["spend", "amount", "cost", "ad_spend"] },
+];
+const INV_ROLES = [
+  { key: "sku", label: "SKU", required: true, guesses: ["sku", "sku_id", "product", "product_code"] },
+  { key: "month", label: "Month", required: true, guesses: ["month", "period"] },
+  { key: "beginning", label: "Beginning Stock", required: true, guesses: ["beginning_inventory", "beginning", "opening_stock", "begin_stock"] },
+  { key: "received", label: "Units Received", required: false, guesses: ["units_received", "received", "restock"] },
+  { key: "sold", label: "Units Sold", required: true, guesses: ["units_sold", "sold", "units"] },
+  { key: "ending", label: "Ending Stock", required: false, guesses: ["ending_inventory", "ending", "closing_stock", "end_stock"] },
+];
+
+function normHeader(h) { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function guessMapping(headers, roleDefs) {
+  const norm = headers.map(normHeader);
+  const mapping = {};
+  roleDefs.forEach(role => {
+    let found = null;
+    for (const g of role.guesses) {
+      const idx = norm.indexOf(normHeader(g));
+      if (idx !== -1) { found = headers[idx]; break; }
+    }
+    mapping[role.key] = found;
+  });
+  return mapping;
+}
+
+function renderMappingTable(tableEl, headers, roleDefs, mapping, onChange) {
+  tableEl.innerHTML = "";
+  const thead = document.createElement("tr");
+  thead.innerHTML = "<th>Role</th><th>Mapped column</th>";
+  tableEl.appendChild(thead);
+  roleDefs.forEach(role => {
+    const tr = document.createElement("tr");
+    const tdLabel = document.createElement("td");
+    tdLabel.innerHTML = role.label + (role.required ? '<span class="req">*</span>' : "") +
+      (role.note ? `<span class="role-note">${role.note}</span>` : "");
+    const tdSelect = document.createElement("td");
+    const sel = document.createElement("select");
+    const noneOpt = document.createElement("option");
+    noneOpt.value = ""; noneOpt.textContent = "— none —";
+    sel.appendChild(noneOpt);
+    headers.forEach(h => {
+      const opt = document.createElement("option");
+      opt.value = h; opt.textContent = h;
+      if (mapping[role.key] === h) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    if (!mapping[role.key]) noneOpt.selected = true;
+    sel.addEventListener("change", () => { mapping[role.key] = sel.value || null; onChange && onChange(); });
+    tdSelect.appendChild(sel);
+    tr.appendChild(tdLabel); tr.appendChild(tdSelect);
+    tableEl.appendChild(tr);
+  });
+}
+
+/* =============================================================================
+   3. Building canonical rows from raw CSV rows + a mapping
+   ============================================================================= */
+
+function buildTransactions(rawRows, mapping, opts) {
+  const out = [];
+  rawRows.forEach((r, idx) => {
+    const date = parseDate(r[mapping.date]);
+    const qty = toNumber(r[mapping.quantity]);
+    let revenue = toNumber(r[mapping.revenue]);
+    let cost = toNumber(r[mapping.cost]);
+    if (!date || !isFinite(qty) || !isFinite(revenue) || !isFinite(cost)) return;
+    if (opts.revenuePerUnit) revenue = revenue * qty;
+    if (opts.costPerUnit) cost = cost * qty;
+    out.push({
+      idx,
+      date, month: monthKey(date),
+      sku: mapping.sku ? String(r[mapping.sku]) : "UNKNOWN",
+      category: mapping.category && r[mapping.category] ? String(r[mapping.category]) : "All",
+      quantity: qty, revenue, cost,
+      isReturn: mapping.returns ? toBool(r[mapping.returns]) : false,
+      customerId: mapping.customerId && r[mapping.customerId] ? String(r[mapping.customerId]) : null,
+      channel: mapping.channel && r[mapping.channel] ? String(r[mapping.channel]) : null,
+    });
+  });
+  return out;
+}
+function buildMarketing(rawRows, mapping) {
+  const out = [];
+  rawRows.forEach(r => {
+    const spend = toNumber(r[mapping.spend]);
+    const channel = mapping.channel ? String(r[mapping.channel]) : null;
+    if (!channel || !isFinite(spend)) return;
+    out.push({ month: mapping.month ? String(r[mapping.month]) : "all", channel, spend });
+  });
+  return out;
+}
+function buildInventory(rawRows, mapping) {
+  const out = [];
+  rawRows.forEach(r => {
+    const sku = mapping.sku ? String(r[mapping.sku]) : null;
+    const month = mapping.month ? String(r[mapping.month]) : null;
+    const beginning = toNumber(r[mapping.beginning]);
+    const sold = toNumber(r[mapping.sold]);
+    const received = mapping.received ? toNumber(r[mapping.received]) : 0;
+    const ending = mapping.ending ? toNumber(r[mapping.ending]) : (isFinite(beginning) && isFinite(received) && isFinite(sold) ? beginning + received - sold : NaN);
+    if (!sku || !month || !isFinite(beginning) || !isFinite(sold)) return;
+    out.push({ sku, month, beginning, received: isFinite(received) ? received : 0, sold, ending: isFinite(ending) ? ending : 0 });
+  });
+  return out;
+}
+
+/* =============================================================================
+   4. The analytics engine -- generalized JS port of core.py / fashion.py.
+      Every function states its formula, same rule as the Python source.
+   ============================================================================= */
+
+const Engine = {};
+
+// Per-line economics: net_revenue/net_cost are zeroed on a return (the sale
+// commercially reverses); margin = net_revenue - net_cost. This collapses
+// core.py's separate COGS vs. non-refundable-fulfillment-cost distinction
+// into one generic "cost" bucket -- see the Honest Limitations footer.
+Engine.lineMargin = t => (t.isReturn ? 0 : t.revenue) - (t.isReturn ? 0 : t.cost);
+Engine.netRevenue = t => (t.isReturn ? 0 : t.revenue);
+Engine.netCost = t => (t.isReturn ? 0 : t.cost);
+
+// Monthly gross vs net revenue -- same formula as core.py's revenue_trend.
+Engine.revenueTrend = txns => {
+  const byMonth = groupBy(txns, t => t.month);
+  return sortedKeys(byMonth).map(month => {
+    const rows = byMonth.get(month);
+    const grossRevenue = sum(rows, t => t.revenue);
+    const netRevenue = sum(rows, Engine.netRevenue);
+    return { month, grossRevenue, netRevenue, returnedRevenue: grossRevenue - netRevenue };
+  });
+};
+
+// Monthly Gross Margin % = (net revenue - net cost) / net revenue -- same
+// formula as core.py's gross_margin_trend (net_cost here plays the role of
+// net_cogs there).
+Engine.marginTrend = txns => {
+  const byMonth = groupBy(txns, t => t.month);
+  return sortedKeys(byMonth).map(month => {
+    const rows = byMonth.get(month);
+    const netRevenue = sum(rows, Engine.netRevenue);
+    const netCost = sum(rows, Engine.netCost);
+    const marginAbs = netRevenue - netCost;
+    const unitsSold = sum(rows, t => t.isReturn ? 0 : t.quantity);
+    return {
+      month, netRevenue, netCost, marginAbs,
+      marginPct: netRevenue ? marginAbs / netRevenue : 0,
+      marginPerUnit: unitsSold ? marginAbs / unitsSold : 0,
+    };
+  });
+};
+
+// Returns margin bridge: gross margin as if nothing were ever returned, vs.
+// the margin actually given back to returned lines, vs. net margin actual --
+// same three-number bridge as core.py's returns_margin_bridge, generalized
+// to the single "cost" bucket (see Honest Limitations: the original also
+// keeps a non-refundable fulfillment cost on returned lines; this engine
+// does not model that separately).
+Engine.returnsBridge = txns => {
+  const grossMarginNoReturns = sum(txns, t => t.revenue - t.cost);
+  const returnsImpact = -sum(txns.filter(t => t.isReturn), t => t.revenue - t.cost);
+  const netMargin = grossMarginNoReturns + returnsImpact;
+  return { grossMarginNoReturns, returnsImpact, netMargin };
+};
+
+// Per-SKU margin (plain, no marketing-cost allocation) -- same shape as
+// core.py's margin_by_sku, generalized cost bucket.
+Engine.marginBySku = txns => {
+  const bySku = groupBy(txns, t => t.sku);
+  return Array.from(bySku.entries()).map(([sku, rows]) => {
+    const category = rows[0].category;
+    const netRevenue = sum(rows, Engine.netRevenue);
+    const netCost = sum(rows, Engine.netCost);
+    const marginAbs = netRevenue - netCost;
+    const unitsSold = sum(rows, t => t.isReturn ? 0 : t.quantity);
+    return { sku, category, netRevenue, netCost, marginAbs, unitsSold };
+  });
+};
+
+// Top-N revenue concentration -- same "Pareto view" as core.py's sku_concentration.
+Engine.concentration = (txns, n) => {
+  const bySku = Engine.marginBySku(txns).sort((a, b) => b.netRevenue - a.netRevenue);
+  const total = sum(bySku, r => r.netRevenue);
+  const topN = sum(bySku.slice(0, n), r => r.netRevenue);
+  return { share: total ? topN / total : 0, nSkus: bySku.length };
+};
+
+// Marketing-cost allocation: each channel's spend is allocated across SKUs in
+// proportion to that SKU's net revenue attributed to the channel (spend per
+// rupee of channel revenue = channelSpend / channelNetRevenue). This is a
+// revenue-share approximation of fashion.py's per-order-line CAC allocation
+// (this engine has no order-ID concept -- see Honest Limitations).
+Engine.channelSpendTotals = mkt => {
+  const byChannel = groupBy(mkt, m => m.channel);
+  const totals = new Map();
+  byChannel.forEach((rows, ch) => totals.set(ch, sum(rows, m => m.spend)));
+  return totals;
+};
+Engine.channelMarginAfterSpend = (txns, mkt) => {
+  const spend = Engine.channelSpendTotals(mkt);
+  const byChannel = groupBy(txns.filter(t => t.channel), t => t.channel);
+  const out = [];
+  byChannel.forEach((rows, channel) => {
+    const marginTotal = sum(rows, Engine.lineMargin);
+    const s = spend.get(channel) || 0;
+    const cmAfterSpend = marginTotal - s;
+    out.push({ channel, marginTotal, spend: s, orders: rows.length, cmAfterSpend, isLossMaking: cmAfterSpend < 0 });
+  });
+  return out.sort((a, b) => a.cmAfterSpend - b.cmAfterSpend);
+};
+Engine.skuMarginAfterSpend = (txns, mkt) => {
+  // Flat per-transaction-row allocation: cost_per_row[channel] = channel
+  // spend / number of rows attributed to that channel, charged in full to
+  // every row (this engine has no order-ID concept, so each row is treated
+  // as its own purchase event -- see Honest Limitations). This mirrors
+  // fashion.py's actual mechanism (spend divided evenly per acquisition
+  // event, not proportional to how much revenue that event happened to
+  // carry) far more closely than a revenue-weighted split would: a cheap,
+  // thin-margin line still absorbs a full acquisition-cost share, which is
+  // exactly why thin-margin SKUs show up loss-making after CAC in the
+  // original pipeline too.
+  const spend = Engine.channelSpendTotals(mkt);
+  const rowCountByChannel = new Map();
+  txns.forEach(t => { if (t.channel) rowCountByChannel.set(t.channel, (rowCountByChannel.get(t.channel) || 0) + 1); });
+  const costPerRow = new Map();
+  spend.forEach((s, ch) => { const n = rowCountByChannel.get(ch); costPerRow.set(ch, n > 0 ? s / n : 0); });
+  const bySku = groupBy(txns, t => t.sku);
+  const out = [];
+  bySku.forEach((rows, sku) => {
+    const category = rows[0].category;
+    const marginTotal = sum(rows, Engine.lineMargin);
+    const allocatedSpend = sum(rows, t => t.channel ? (costPerRow.get(t.channel) || 0) : 0);
+    const cmAfterSpend = marginTotal - allocatedSpend;
+    out.push({ sku, category, marginTotal, allocatedSpend, cmAfterSpend, isLossMaking: cmAfterSpend < 0 });
+  });
+  return out.sort((a, b) => a.cmAfterSpend - b.cmAfterSpend);
+};
+
+// Channel acquisition cost. If customerId is mapped: true CAC = channel spend
+// / count of customers whose EARLIEST transaction in the whole dataset is
+// attributed to that channel (same "first order only" logic as fashion.py's
+// cac_by_channel). Without customer IDs, falls back to spend / transaction
+// count on that channel (a cost-per-order proxy, labeled as such).
+Engine.channelAcquisitionCost = (txns, mkt) => {
+  const spend = Engine.channelSpendTotals(mkt);
+  const hasCustomers = txns.some(t => t.customerId);
+  const out = [];
+  if (hasCustomers) {
+    const firstByCustomer = new Map();
+    txns.forEach(t => {
+      if (!t.customerId) return;
+      const cur = firstByCustomer.get(t.customerId);
+      if (!cur || t.date < cur.date) firstByCustomer.set(t.customerId, t);
+    });
+    const newCustByChannel = new Map();
+    firstByCustomer.forEach(t => { if (t.channel) newCustByChannel.set(t.channel, (newCustByChannel.get(t.channel) || 0) + 1); });
+    spend.forEach((s, ch) => {
+      const n = newCustByChannel.get(ch) || 0;
+      out.push({ channel: ch, spend: s, n, metric: n ? s / n : NaN, isProxy: false });
+    });
+  } else {
+    const ordersByChannel = new Map();
+    txns.forEach(t => { if (t.channel) ordersByChannel.set(t.channel, (ordersByChannel.get(t.channel) || 0) + 1); });
+    spend.forEach((s, ch) => {
+      const n = ordersByChannel.get(ch) || 0;
+      out.push({ channel: ch, spend: s, n, metric: n ? s / n : NaN, isProxy: true });
+    });
+  }
+  return out.filter(r => r.spend > 0).sort((a, b) => b.metric - a.metric);
+};
+
+// Cohort retention: cohort_month = a customer's first transaction month;
+// for each cohort and each month-offset, % of that cohort still transacting.
+// Same formula as fashion.py's cohort_retention_table.
+Engine.cohortRetention = txns => {
+  const withCust = txns.filter(t => t.customerId);
+  const firstMonthByCustomer = new Map();
+  withCust.forEach(t => {
+    const cur = firstMonthByCustomer.get(t.customerId);
+    if (!cur || t.date < cur.date) firstMonthByCustomer.set(t.customerId, t);
+  });
+  const cohortMonthByCustomer = new Map();
+  firstMonthByCustomer.forEach((t, cust) => cohortMonthByCustomer.set(cust, t.month));
+
+  const cohortSizes = new Map();
+  cohortMonthByCustomer.forEach(m => cohortSizes.set(m, (cohortSizes.get(m) || 0) + 1));
+
+  // distinct (customer, month) active pairs
+  const activeSet = new Set();
+  withCust.forEach(t => activeSet.add(t.customerId + "|" + t.month));
+  const activeByCohortOffset = new Map(); // "cohortMonth|offset" -> Set(customer)
+  const seen = new Set();
+  withCust.forEach(t => {
+    const key = t.customerId + "|" + t.month;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const cohort = cohortMonthByCustomer.get(t.customerId);
+    const offset = monthOffset(cohort, t.month);
+    if (offset < 0 || offset > CONFIG.cohortWindowMonths) return;
+    const k = cohort + "|" + offset;
+    if (!activeByCohortOffset.has(k)) activeByCohortOffset.set(k, new Set());
+    activeByCohortOffset.get(k).add(t.customerId);
+  });
+
+  const cohorts = Array.from(cohortSizes.keys()).sort();
+  const offsets = [];
+  for (let o = 0; o <= CONFIG.cohortWindowMonths; o++) offsets.push(o);
+  const table = cohorts.map(cohort => {
+    const size = cohortSizes.get(cohort);
+    return offsets.map(o => {
+      const active = activeByCohortOffset.get(cohort + "|" + o);
+      return active ? active.size / size : null;
+    });
+  });
+  return { cohorts, offsets, table };
+};
+
+// Inventory: monthly sell-through, lifetime cumulative sell-through, dead stock.
+// Same formulas as fashion.py's sell_through_rate_monthly / cumulative_sell_through
+// / dead_stock_pct.
+Engine.sellThroughMonthly = inv => {
+  const byMonth = groupBy(inv, r => r.month);
+  return sortedKeys(byMonth).map(month => {
+    const rows = byMonth.get(month);
+    const available = sum(rows, r => r.beginning + r.received);
+    const sold = sum(rows, r => r.sold);
+    return { month, rate: available ? sold / available : 0 };
+  });
+};
+Engine.cumulativeSellThrough = inv => {
+  const bySku = groupBy(inv, r => r.sku);
+  const out = [];
+  bySku.forEach((rows, sku) => {
+    const sorted = rows.slice().sort((a, b) => a.month < b.month ? -1 : 1);
+    const initial = sorted[0].beginning;
+    const totalReceived = sum(sorted, r => r.received);
+    const totalSold = sum(sorted, r => r.sold);
+    const monthsAvailable = sorted.length;
+    const available = initial + totalReceived;
+    out.push({ sku, monthsAvailable, cumulativeSellThrough: available ? totalSold / available : null });
+  });
+  return out;
+};
+Engine.deadStock = inv => {
+  const cum = Engine.cumulativeSellThrough(inv);
+  const eligible = cum.filter(r => r.monthsAvailable >= CONFIG.deadStockMinMonths);
+  const dead = eligible.filter(r => r.cumulativeSellThrough != null && r.cumulativeSellThrough <= CONFIG.deadStockMaxSellThrough);
+  return { nEligible: eligible.length, nDead: dead.length, pct: eligible.length ? dead.length / eligible.length : NaN, deadSkuIds: new Set(dead.map(r => r.sku)) };
+};
+
+/* =============================================================================
+   5. SVG chart primitives
+   ============================================================================= */
+
+const SVGNS = "http://www.w3.org/2000/svg";
+function se(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function text(x, y, str, cls, attrs) {
+  const t = se("text", Object.assign({ x, y, class: cls || "" }, attrs || {}));
+  t.textContent = str;
+  return t;
+}
+function makeSvg(height) {
+  return se("svg", { class: "chart-svg", viewBox: `0 0 1000 ${height}`, height });
+}
+function niceTicks(min, max, count) {
+  count = count || 5;
+  if (!isFinite(min) || !isFinite(max)) { min = 0; max = 1; }
+  if (min > 0) min = 0;
+  if (min === max) { max = min + 1; }
+  const range = max - min;
+  const rawStep = range / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep || 1)));
+  const norm = rawStep / mag;
+  let step;
+  if (norm < 1.5) step = 1 * mag; else if (norm < 3) step = 2 * mag; else if (norm < 7) step = 5 * mag; else step = 10 * mag;
+  const niceMin = Math.floor(min / step) * step;
+  const niceMax = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = niceMin; v <= niceMax + step * 0.5; v += step) ticks.push(Math.round(v * 1e6) / 1e6);
+  return { ticks, min: niceMin, max: niceMax };
+}
+function linearScale(domain, range) {
+  const [d0, d1] = domain, [r0, r1] = range;
+  const f = v => r0 + (v - d0) / ((d1 - d0) || 1) * (r1 - r0);
+  return f;
+}
+function bandScale(categories, range, paddingRatio) {
+  paddingRatio = paddingRatio == null ? 0.3 : paddingRatio;
+  const n = Math.max(categories.length, 1);
+  const [r0, r1] = range;
+  const step = (r1 - r0) / n;
+  const bw = step * (1 - paddingRatio);
+  const f = cat => r0 + step * categories.indexOf(cat) + (step - bw) / 2;
+  f.bandwidth = bw; f.step = step;
+  return f;
+}
+
+// Vertical bar/line frame: y = values, x = category band. Draws gridlines,
+// y tick labels, baseline, x tick labels (optionally rotated).
+function drawVFrame(svg, opts) {
+  const { marginL = 56, marginR = 16, marginT = 8, marginB, yMin, yMax, yFormat, xCategories, xRotate = false } = opts;
+  const height = Number(svg.getAttribute("viewBox").split(" ")[3]);
+  const mb = marginB != null ? marginB : (xRotate ? 46 : 26);
+  const x0 = marginL, x1 = 1000 - marginR, y0 = marginT, y1 = height - mb;
+  const { ticks, min, max } = niceTicks(yMin, yMax, 5);
+  const yScale = linearScale([min, max], [y1, y0]);
+  ticks.forEach(t => {
+    const y = yScale(t);
+    svg.appendChild(se("line", { x1: x0, x2: x1, y1: y, y2: y, stroke: COLORS.grid, "stroke-width": 1 }));
+    svg.appendChild(text(x0 - 8, y + 4, yFormat ? yFormat(t) : String(t), "tick-label", { "text-anchor": "end" }));
+  });
+  svg.appendChild(se("line", { x1: x0, x2: x1, y1: y1, y2: y1, stroke: COLORS.baseline, "stroke-width": 1 }));
+  let xScale = null;
+  if (xCategories) {
+    xScale = bandScale(xCategories, [x0, x1], 0.3);
+    xCategories.forEach(cat => {
+      const cx = xScale(cat) + xScale.bandwidth / 2;
+      const attrs = { "text-anchor": xRotate ? "end" : "middle" };
+      if (xRotate) attrs.transform = `rotate(-35 ${cx} ${y1 + 14})`;
+      svg.appendChild(text(cx, y1 + 14, cat, "tick-label", attrs));
+    });
+  }
+  return { x0, x1, y0, y1, yScale, xScale, min, max };
+}
+function drawBars(svg, frame, categories, values, colorFn, labelFn) {
+  categories.forEach((cat, i) => {
+    const v = values[i];
+    if (!isFinite(v)) return;
+    const x = frame.xScale(cat), w = frame.xScale.bandwidth;
+    const yTop = frame.yScale(Math.max(v, 0)), yBase = frame.yScale(Math.min(v, 0));
+    const h = Math.max(Math.abs(frame.yScale(v) - frame.yScale(0)), 0);
+    svg.appendChild(se("rect", { x, y: v >= 0 ? frame.yScale(v) : frame.yScale(0), width: w, height: h, fill: colorFn(v, i, cat) }));
+    if (labelFn) {
+      const ly = v >= 0 ? frame.yScale(v) - 5 : frame.yScale(v) + 12;
+      svg.appendChild(text(x + w / 2, ly, labelFn(v, i, cat), "bar-label", { "text-anchor": "middle" }));
+    }
+  });
+}
+function drawLine(svg, frame, categories, values, color) {
+  const pts = categories.map((cat, i) => [frame.xScale(cat) + frame.xScale.bandwidth / 2, frame.yScale(values[i])]).filter(p => isFinite(p[1]));
+  if (!pts.length) return;
+  const d = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  svg.appendChild(se("path", { d, fill: "none", stroke: color, "stroke-width": 2.5 }));
+  pts.forEach(p => svg.appendChild(se("circle", { cx: p[0], cy: p[1], r: 4, fill: color })));
+}
+
+// Horizontal bar frame: x = values, y = category band (used for best/worst SKU,
+// channel-as-rows, and inventory tail charts).
+function drawHFrame(svg, opts) {
+  const { marginL = 96, marginR = 70, marginT = 4, marginB = 4, xMin, xMax, xFormat, yCategories } = opts;
+  const height = Number(svg.getAttribute("viewBox").split(" ")[3]);
+  const x0 = marginL, x1 = 1000 - marginR, y0 = marginT, y1 = height - marginB;
+  let lo = Math.min(0, xMin), hi = Math.max(0, xMax);
+  const { ticks, min, max } = niceTicks(lo, hi, 4);
+  const xScale = linearScale([min, max], [x0, x1]);
+  const yScale = bandScale(yCategories, [y0, y1], 0.28);
+  svg.appendChild(se("line", { x1: xScale(0), x2: xScale(0), y1: y0, y2: y1, stroke: COLORS.baseline, "stroke-width": 1 }));
+  yCategories.forEach(cat => {
+    const cy = yScale(cat) + yScale.bandwidth / 2;
+    svg.appendChild(text(x0 - 8, cy + 4, cat, "tick-label", { "text-anchor": "end" }));
+  });
+  return { x0, x1, y0, y1, xScale, yScale, min, max };
+}
+function drawHBars(svg, frame, categories, values, colorFn, labelFn) {
+  categories.forEach((cat, i) => {
+    const v = values[i];
+    if (!isFinite(v)) return;
+    const y = frame.yScale(cat), h = frame.yScale.bandwidth;
+    const x0 = v >= 0 ? frame.xScale(0) : frame.xScale(v);
+    const w = Math.max(Math.abs(frame.xScale(v) - frame.xScale(0)), 0.5);
+    svg.appendChild(se("rect", { x: x0, y, width: w, height: h, fill: colorFn(v, i, cat) }));
+    if (labelFn) {
+      const lx = v >= 0 ? frame.xScale(v) + 6 : frame.xScale(v) - 6;
+      svg.appendChild(text(lx, y + h / 2 + 4, labelFn(v, i, cat), "bar-label", { "text-anchor": v >= 0 ? "start" : "end" }));
+    }
+  });
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+}
+function lerpColor(a, b, t) {
+  const pa = hexToRgb(a), pb = hexToRgb(b);
+  return `rgb(${Math.round(pa.r + (pb.r - pa.r) * t)},${Math.round(pa.g + (pb.g - pa.g) * t)},${Math.round(pa.b + (pb.b - pa.b) * t)})`;
+}
+function seqBlueColor(v) {
+  if (v == null || !isFinite(v)) return "#f4f3f0";
+  v = Math.max(0, Math.min(1, v));
+  const stops = COLORS.sequentialBlue, n = stops.length - 1;
+  const idx = v * n, i0 = Math.floor(idx), i1 = Math.min(n, i0 + 1);
+  return lerpColor(stops[i0], stops[i1], idx - i0);
+}
+
+/* =============================================================================
+   6. Panel renderers -- one per dashboard.py render_* function, same chart
+      type, order, colors, and caption style, drawn live with SVG instead of
+      a static PNG.
+   ============================================================================= */
+
+function panelHeader(container, title, subtitle) {
+  container.innerHTML = "";
+  const h = document.createElement("div");
+  h.className = "chart-title";
+  h.textContent = title;
+  container.appendChild(h);
+  if (subtitle) {
+    const s = document.createElement("div");
+    s.style.cssText = "font-size:12px;color:var(--ink-muted);margin-bottom:4px;";
+    s.textContent = subtitle;
+    container.appendChild(s);
+  }
+}
+function panelCaption(container, caption) {
+  const c = document.createElement("p");
+  c.className = "chart-caption";
+  c.textContent = caption;
+  container.appendChild(c);
+}
+function subplotRow(container, cols) {
+  const row = document.createElement("div");
+  row.className = "panel-row " + cols;
+  container.appendChild(row);
+  return row;
+}
+function subplotCol(row, titleText) {
+  const col = document.createElement("div");
+  if (titleText) {
+    const t = document.createElement("div");
+    t.className = "subplot-title";
+    t.textContent = titleText;
+    col.appendChild(t);
+  }
+  row.appendChild(col);
+  return col;
+}
+
+function renderScorecard(container, ctx) {
+  const { marginTrend, revenueTrend, returnsBridge, concentration, deadStock, cac, hasReturns, hasMarketing, hasInventory, isDefault } = ctx;
+  const netRevenue = sum(revenueTrend, r => r.netRevenue);
+  const netCost = sum(marginTrend, r => r.netCost);
+  const marginAbs = netRevenue - netCost;
+  const marginPct = netRevenue ? marginAbs / netRevenue : 0;
+
+  const tiles = [];
+  tiles.push(["Net Revenue (window)", fmtCr(netRevenue), false]);
+  tiles.push(["Gross Margin %", fmtPct1(marginPct), false]);
+  tiles.push(["Gross Margin (window)", fmtCr(marginAbs), false]);
+  tiles.push([`Top 10 Concentration`, fmtPct0(concentration.share), false]);
+  if (hasReturns) {
+    const pct = returnsBridge.grossMarginNoReturns ? -returnsBridge.returnsImpact / returnsBridge.grossMarginNoReturns : 0;
+    tiles.push(["Returns Cost (% of Margin)", fmtPct1(pct), pct > CONFIG.returnsWarningThreshold]);
+  }
+  if (hasMarketing && cac && cac.length) {
+    const totalSpend = sum(cac, c => c.spend);
+    const totalN = sum(cac, c => c.n);
+    const blendedCac = totalN ? totalSpend / totalN : NaN;
+    const avgMarginPerRow = ctx.avgMarginPerRow || 0;
+    const ltv = avgMarginPerRow * CONFIG.ltvAssumedLifetimeOrders;
+    const ltvCac = blendedCac ? ltv / blendedCac : NaN;
+    tiles.push(["Blended LTV:CAC", isFinite(ltvCac) ? ltvCac.toFixed(1) + "x" : "–", isFinite(ltvCac) && ltvCac < CONFIG.ltvCacWarningThreshold]);
+  }
+  if (hasInventory) {
+    tiles.push(["Dead-Stock %", fmtPct1(deadStock.pct), deadStock.pct > CONFIG.deadStockWarningThreshold]);
+  }
+
+  panelHeader(container, isDefault ? "CEO Scorecard — D2C Fashion (synthetic data)" : "CEO Scorecard — your data");
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:10px 0 4px;";
+  tiles.forEach(([label, value, warn]) => {
+    const tile = document.createElement("div");
+    tile.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px 10px;text-align:center;background:var(--page);";
+    const lbl = document.createElement("div");
+    lbl.style.cssText = "font-size:12px;color:var(--ink-secondary);margin-bottom:6px;min-height:30px;";
+    lbl.textContent = label;
+    const val = document.createElement("div");
+    val.style.cssText = `font-size:22px;font-weight:700;color:${warn ? COLORS.status.critical : COLORS.ink.primary};`;
+    val.textContent = value;
+    tile.appendChild(lbl); tile.appendChild(val);
+    grid.appendChild(tile);
+  });
+  container.appendChild(grid);
+  panelCaption(container, "Red values mark a headline warning sign (heavy returns drag, weak acquisition payback, or meaningful dead stock).");
+}
+
+function renderTrend(container, ctx) {
+  const { revenueTrend, marginTrend } = ctx;
+  const months = revenueTrend.map(r => r.month);
+  panelHeader(container, "Revenue & Margin Trend");
+  const row = subplotRow(container, "panel-row");
+  row.style.display = "block";
+
+  const c1 = subplotCol(row, "Net Revenue"); c1.style.marginBottom = "6px";
+  const svg1 = makeSvg(170); c1.appendChild(svg1);
+  const vals1 = revenueTrend.map(r => r.netRevenue);
+  const f1 = drawVFrame(svg1, { yMin: 0, yMax: Math.max(...vals1, 1) * 1.1, yFormat: commas, xCategories: months, marginB: 4 });
+  drawBars(svg1, f1, months, vals1, () => COLORS.categorical[0]);
+
+  const c2 = subplotCol(row, "Gross Margin %"); c2.style.marginBottom = "6px";
+  const svg2 = makeSvg(150); c2.appendChild(svg2);
+  const vals2 = marginTrend.map(r => r.marginPct);
+  const f2 = drawVFrame(svg2, { yMin: Math.min(...vals2, 0) * 0.9, yMax: Math.max(...vals2, 0.01) * 1.1, yFormat: fmtPct0, xCategories: months, marginB: 4 });
+  drawLine(svg2, f2, months, vals2, COLORS.categorical[2]);
+
+  const c3 = subplotCol(row, "Gross Margin per Unit Sold");
+  const svg3 = makeSvg(170); c3.appendChild(svg3);
+  const vals3 = marginTrend.map(r => r.marginPerUnit);
+  const f3 = drawVFrame(svg3, { yMin: Math.min(...vals3, 0) * 1.1, yMax: Math.max(...vals3, 1) * 1.1, yFormat: commas, xCategories: months, xRotate: true });
+  drawLine(svg3, f3, months, vals3, COLORS.categorical[6]);
+
+  panelCaption(container, "Three independent-axis panels (never dual-axis, since revenue and margin % are different units). Watch whether revenue growth is coming with shrinking margin per unit -- that's growth funded by discounting.");
+}
+
+function renderReturnsBridge(container, ctx) {
+  const { returnsBridge } = ctx;
+  const { grossMarginNoReturns: gross, returnsImpact: impact, netMargin: net } = returnsBridge;
+  panelHeader(container, "Returns Margin Bridge — Full Window");
+  const svg = makeSvg(320);
+  container.appendChild(svg);
+
+  const allVals = [0, gross, gross + impact, net];
+  const yMin = Math.min(...allVals, 0), yMax = Math.max(...allVals, 1);
+  const frame = drawVFrame(svg, { yMin: yMin * 1.05, yMax: yMax * 1.15, yFormat: commas, xCategories: ["Gross Margin (no returns)", "Returns Impact", "Net Margin (actual)"], xRotate: false, marginB: 40 });
+
+  // bar 1: absolute, 0 -> gross
+  const x1 = frame.xScale("Gross Margin (no returns)"), w = frame.xScale.bandwidth;
+  svg.appendChild(se("rect", { x: x1, y: frame.yScale(Math.max(gross, 0)), width: w, height: Math.abs(frame.yScale(gross) - frame.yScale(0)), fill: COLORS.categorical[0] }));
+  svg.appendChild(text(x1 + w / 2, frame.yScale(gross) - 8, fmtCr(gross), "bar-label", { "text-anchor": "middle" }));
+
+  // bar 2: relative, gross -> gross+impact (floats)
+  const x2 = frame.xScale("Returns Impact");
+  const top2 = Math.max(gross, gross + impact), bot2 = Math.min(gross, gross + impact);
+  svg.appendChild(se("rect", { x: x2, y: frame.yScale(top2), width: w, height: Math.max(Math.abs(frame.yScale(top2) - frame.yScale(bot2)), 1), fill: COLORS.status.critical }));
+  svg.appendChild(text(x2 + w / 2, frame.yScale(bot2) + 16, "−" + fmtCr(-impact), "bar-label", { "text-anchor": "middle" }));
+  // connector
+  svg.appendChild(se("line", { x1: x1 + w, x2: x2, y1: frame.yScale(gross), y2: frame.yScale(gross), stroke: COLORS.baseline, "stroke-width": 1, "stroke-dasharray": "3,3" }));
+
+  // bar 3: total, 0 -> net
+  const x3 = frame.xScale("Net Margin (actual)");
+  svg.appendChild(se("rect", { x: x3, y: frame.yScale(Math.max(net, 0)), width: w, height: Math.abs(frame.yScale(net) - frame.yScale(0)), fill: COLORS.categorical[0] }));
+  svg.appendChild(text(x3 + w / 2, frame.yScale(net) - 8, fmtCr(net), "bar-label", { "text-anchor": "middle" }));
+  svg.appendChild(se("line", { x1: x2 + w, x2: x3, y1: frame.yScale(gross + impact), y2: frame.yScale(gross + impact), stroke: COLORS.baseline, "stroke-width": 1, "stroke-dasharray": "3,3" }));
+
+  const pct = gross ? -impact / gross : 0;
+  panelCaption(container, `Returns alone erase ${fmtPct0(pct)} of what margin would have been with zero returns -- the clearest single argument for treating returns as a first-class margin driver.`);
+}
+
+function renderMarginBySku(container, ctx) {
+  const { skuRows, hasMarketing, totalSkuCount } = ctx;
+  // Cap n so "best" and "worst" never overlap when the catalog is small
+  // (a 12-SKU business would otherwise see the same 12 products in both panels).
+  const n = Math.max(1, Math.min(12, Math.floor(skuRows.length / 2)));
+  const key = hasMarketing ? "cmAfterSpend" : "marginAbs";
+  const sorted = skuRows.slice().sort((a, b) => b[key] - a[key]);
+  const top = sorted.slice(0, n).slice().sort((a, b) => a[key] - b[key]);
+  const bottom = sorted.slice(-n).slice().sort((a, b) => b[key] - a[key]);
+  const nLoss = hasMarketing ? skuRows.filter(r => r.isLossMaking).length : skuRows.filter(r => r[key] < 0).length;
+
+  panelHeader(container, hasMarketing ? "Margin by Product, after Marketing Cost" : "Margin by Product");
+  const row = subplotRow(container, "panel-row cols-2");
+  const c1 = subplotCol(row, `Best ${n} Products`);
+  const c2 = subplotCol(row, `Worst ${n} Products`);
+  const h = Math.max(320, 26 * n);
+  const svg1 = makeSvg(h); c1.appendChild(svg1);
+  const svg2 = makeSvg(h); c2.appendChild(svg2);
+
+  const topCats = top.map(r => r.sku), topVals = top.map(r => r[key]);
+  const f1 = drawHFrame(svg1, { xMin: 0, xMax: Math.max(...topVals, 1) * 1.3, yCategories: topCats });
+  drawHBars(svg1, f1, topCats, topVals, () => COLORS.categorical[0], v => fmtMoney0(v));
+
+  const botCats = bottom.map(r => r.sku), botVals = bottom.map(r => r[key]);
+  const f2 = drawHFrame(svg2, { xMin: Math.min(...botVals, 0) * 1.3, xMax: Math.max(...botVals, 1) * 1.3, yCategories: botCats });
+  drawHBars(svg2, f2, botCats, botVals, v => v < 0 ? COLORS.status.critical : COLORS.categorical[0], v => fmtMoney0(v));
+
+  panelCaption(container, `${nLoss} of ${totalSkuCount} products are loss-making${hasMarketing ? " after marketing cost" : ""} (red, right panel).`);
+}
+
+function renderChannel(container, ctx) {
+  const { cac, channelMarginAfterSpend } = ctx;
+  const channels = channelMarginAfterSpend.map(r => r.channel);
+  panelHeader(container, "Channel Economics: Acquisition Cost and Payback");
+  const row = subplotRow(container, "panel-row cols-2");
+  const isProxy = cac.length && cac[0].isProxy;
+  const c1 = subplotCol(row, isProxy ? "Cost per Order (₹, proxy — no Customer ID mapped)" : "True CAC (₹ per new customer)");
+  const c2 = subplotCol(row, "Margin after Marketing Spend (₹)");
+  const svg1 = makeSvg(280); c1.appendChild(svg1);
+  const svg2 = makeSvg(280); c2.appendChild(svg2);
+
+  const cacCats = cac.map(r => r.channel), cacVals = cac.map(r => r.metric);
+  const f1 = drawVFrame(svg1, { yMin: 0, yMax: Math.max(...cacVals.filter(isFinite), 1) * 1.25, yFormat: commas, xCategories: cacCats, marginB: 30 });
+  drawBars(svg1, f1, cacCats, cacVals, (v, i, cat) => colorForChannel(cat, cacCats), v => fmtMoney0(v));
+
+  const pnlCats = channelMarginAfterSpend.map(r => r.channel), pnlVals = channelMarginAfterSpend.map(r => r.cmAfterSpend);
+  const f2 = drawVFrame(svg2, { yMin: Math.min(...pnlVals, 0) * 1.25, yMax: Math.max(...pnlVals, 1) * 1.2, yFormat: commas, xCategories: pnlCats, marginB: 30 });
+  drawBars(svg2, f2, pnlCats, pnlVals, (v, i, cat) => v < 0 ? COLORS.status.critical : colorForChannel(cat, pnlCats), v => fmtL(v));
+
+  const lossMaking = channelMarginAfterSpend.filter(r => r.isLossMaking).map(r => r.channel);
+  const caption = lossMaking.length
+    ? `${lossMaking.join(", ")} ${lossMaking.length > 1 ? "are the only channels" : "is the only channel"} that ${lossMaking.length > 1 ? "don't" : "doesn't"} earn back its own spend (red, right panel).`
+    : "Every channel currently earns back its own spend.";
+  panelCaption(container, caption);
+}
+
+function renderInventory(container, ctx) {
+  const { sellThroughMonthly, cumulativeSellThrough, deadStock } = ctx;
+  const nTail = 15;
+  panelHeader(container, "Inventory Health: Sell-Through and Dead Stock");
+  const row = subplotRow(container, "panel-row cols-2 uneven");
+  const c1 = subplotCol(row, "Company Sell-Through Rate (monthly)");
+  const c2 = subplotCol(row, `Bottom ${nTail} SKUs — Cumulative Sell-Through`);
+  const svg1 = makeSvg(360); c1.appendChild(svg1);
+  const svg2 = makeSvg(360); c2.appendChild(svg2);
+
+  const months = sellThroughMonthly.map(r => r.month), rates = sellThroughMonthly.map(r => r.rate);
+  const f1 = drawVFrame(svg1, { yMin: 0, yMax: Math.max(...rates, 0.1) * 1.15, yFormat: fmtPct0, xCategories: months, xRotate: true });
+  drawLine(svg1, f1, months, rates, COLORS.categorical[0]);
+
+  const withVal = cumulativeSellThrough.filter(r => r.cumulativeSellThrough != null).sort((a, b) => a.cumulativeSellThrough - b.cumulativeSellThrough).slice(0, nTail).sort((a, b) => b.cumulativeSellThrough - a.cumulativeSellThrough);
+  const cats = withVal.map(r => r.sku);
+  const vals = withVal.map(r => Math.max(r.cumulativeSellThrough, 0.01));
+  const f2 = drawHFrame(svg2, { xMin: 0, xMax: 0.8, yCategories: cats });
+  drawHBars(svg2, f2, cats, vals, (v, i) => deadStock.deadSkuIds.has(cats[i]) ? COLORS.status.critical : COLORS.categorical[0], (v, i) => fmtPct0(withVal[i].cumulativeSellThrough));
+
+  panelCaption(container, `${deadStock.nDead} SKUs (red) are flagged dead stock -- old enough to have proven themselves (≥${CONFIG.deadStockMinMonths} months available), but under ${fmtPct0(CONFIG.deadStockMaxSellThrough)} sold through everything they ever had in stock.`);
+}
+
+function renderCohort(container, ctx) {
+  const { cohort } = ctx;
+  panelHeader(container, "Cohort Retention Heatmap");
+  const { cohorts, offsets, table } = cohort;
+  const rowH = 26, marginL = 100, marginT = 24, marginR = 60;
+  const width = 1000 - marginL - marginR;
+  const colW = width / offsets.length;
+  const height = marginT + cohorts.length * rowH + 10;
+  const svg = makeSvg(height);
+  container.appendChild(svg);
+  offsets.forEach((o, ci) => {
+    svg.appendChild(text(marginL + ci * colW + colW / 2, marginT - 8, "+" + o + "mo", "tick-label", { "text-anchor": "middle" }));
+  });
+  cohorts.forEach((coh, ri) => {
+    svg.appendChild(text(marginL - 10, marginT + ri * rowH + rowH / 2 + 4, coh, "tick-label", { "text-anchor": "end" }));
+    offsets.forEach((o, ci) => {
+      const v = table[ri][ci];
+      const x = marginL + ci * colW, y = marginT + ri * rowH;
+      svg.appendChild(se("rect", { x, y, width: colW - 1, height: rowH - 1, fill: seqBlueColor(v) }));
+      if (v != null) {
+        svg.appendChild(text(x + colW / 2, y + rowH / 2 + 4, fmtPct0(v), "bar-label", { "text-anchor": "middle", fill: v > 0.55 ? "#fff" : COLORS.ink.primary }));
+      }
+    });
+  });
+  const m1vals = cohorts.map((c, ri) => table[ri][1]).filter(v => v != null);
+  const avgM1 = m1vals.length ? sum(m1vals, v => v) / m1vals.length : NaN;
+  panelCaption(container, `Retention drops after month 0 (avg ~${fmtPct0(avgM1)} by month 1 across cohorts) -- offset 0 is always 100% by construction.`);
+}
+
+/* =============================================================================
+   7. Executive summary + panel orchestration (graceful degradation)
+   ============================================================================= */
+
+function renderExecSummary(container, ctx) {
+  container.innerHTML = "";
+  const cards = [];
+  const marginPct = ctx.netRevenue ? ctx.marginAbs / ctx.netRevenue : 0;
+  cards.push({
+    cls: "", headline: fmtPct1(marginPct), detail: "gross margin across the loaded window -- revenue minus cost of goods, before any returns/marketing adjustment.",
+  });
+  if (ctx.hasReturns) {
+    const pct = ctx.returnsBridge.grossMarginNoReturns ? -ctx.returnsBridge.returnsImpact / ctx.returnsBridge.grossMarginNoReturns : 0;
+    cards.push({ cls: "critical", headline: fmtPct0(pct), detail: "of gross margin is given back to returns -- the single largest, most controllable margin leak, if returns are mapped." });
+  }
+  if (ctx.hasMarketing) {
+    const lossMaking = ctx.channelMarginAfterSpend.filter(r => r.isLossMaking);
+    const worst = lossMaking.length ? lossMaking[0] : null;
+    cards.push({
+      cls: worst ? "critical" : "",
+      headline: worst ? `${worst.channel} loses on spend` : "All channels pay for themselves",
+      detail: worst ? `${worst.channel} spends ${fmtL(worst.spend)} but returns only ${fmtL(worst.marginTotal)} in margin -- a net loss of ${fmtL(-worst.cmAfterSpend)}.` : "Every marketing channel's margin covers its own spend.",
+    });
+  }
+  const nLossSku = ctx.hasMarketing ? ctx.skuRows.filter(r => r.isLossMaking).length : ctx.skuRows.filter(r => r.marginAbs < 0).length;
+  cards.push({
+    cls: nLossSku > 0 ? "warning" : "",
+    headline: `${nLossSku} of ${ctx.totalSkuCount} products`,
+    detail: `are loss-making${ctx.hasMarketing ? " after marketing cost" : ""} in the loaded window. Top-10 products = ${fmtPct0(ctx.concentration.share)} of revenue.`,
+  });
+  if (ctx.hasInventory) {
+    cards.push({
+      cls: ctx.deadStock.pct > 0.10 ? "warning" : "",
+      headline: `${fmtPct1(ctx.deadStock.pct)} dead stock`,
+      detail: `${ctx.deadStock.nDead} of ${ctx.deadStock.nEligible} eligible SKUs have sold through under ${fmtPct0(CONFIG.deadStockMaxSellThrough)} of everything they ever had in stock.`,
+    });
+  }
+  cards.forEach(c => {
+    const card = document.createElement("div");
+    card.className = "finding-card" + (c.cls ? " " + c.cls : "");
+    const h = document.createElement("div");
+    h.className = "headline" + (c.cls === "critical" ? " critical-text" : "");
+    h.textContent = c.headline;
+    const d = document.createElement("div");
+    d.className = "detail";
+    d.textContent = c.detail;
+    card.appendChild(h); card.appendChild(d);
+    container.appendChild(card);
+  });
+}
+
+function computeContext(state) {
+  const { txns, mkt, inv } = state;
+  const hasReturns = state.mappingTxn.returns != null;
+  const hasCustomer = txns.some(t => t.customerId);
+  const hasChannel = txns.some(t => t.channel);
+  const hasMarketing = hasChannel && mkt.length > 0;
+  const hasInventory = inv.length > 0;
+
+  const revenueTrend = Engine.revenueTrend(txns);
+  const marginTrend = Engine.marginTrend(txns);
+  const netRevenue = sum(revenueTrend, r => r.netRevenue);
+  const marginAbs = sum(marginTrend, r => r.marginAbs);
+  const returnsBridge = Engine.returnsBridge(txns);
+  const concentration = Engine.concentration(txns, 10);
+  const avgMarginPerRow = txns.length ? marginAbs / txns.length : 0;
+
+  let skuRows = Engine.marginBySku(txns);
+  let channelMarginAfterSpend = [], cac = [];
+  if (hasMarketing) {
+    skuRows = Engine.skuMarginAfterSpend(txns, mkt);
+    channelMarginAfterSpend = Engine.channelMarginAfterSpend(txns, mkt);
+    cac = Engine.channelAcquisitionCost(txns, mkt);
+  }
+
+  let sellThroughMonthly = [], cumulativeSellThrough = [], deadStock = { nEligible: 0, nDead: 0, pct: NaN, deadSkuIds: new Set() };
+  if (hasInventory) {
+    sellThroughMonthly = Engine.sellThroughMonthly(inv);
+    cumulativeSellThrough = Engine.cumulativeSellThrough(inv);
+    deadStock = Engine.deadStock(inv);
+  }
+
+  let cohort = null;
+  if (hasCustomer) cohort = Engine.cohortRetention(txns);
+
+  const totalSkuCount = hasInventory ? new Set(inv.map(r => r.sku)).size : new Set(txns.map(t => t.sku)).size;
+
+  return {
+    txns, mkt, inv, revenueTrend, marginTrend, netRevenue, marginAbs, returnsBridge, concentration,
+    avgMarginPerRow, skuRows, channelMarginAfterSpend, cac, sellThroughMonthly, cumulativeSellThrough,
+    deadStock, cohort, totalSkuCount, hasReturns, hasCustomer, hasMarketing, hasInventory,
+    isDefault: state.isDefault,
+  };
+}
+
+function renderAll(state) {
+  const ctx = computeContext(state);
+
+  document.getElementById("disclaimer-box").innerHTML = state.isDefault
+    ? "⚠️ Loaded with a BUNDLED SYNTHETIC D2C fashion dataset — generated by a seeded data generator for a portfolio project, not sourced from any real business. Upload your own CSV above to replace it."
+    : "⚠️ Loaded with a user-supplied dataset for this session — verify it does not contain sensitive real customer data before sharing this page or a screenshot of it.";
+
+  renderExecSummary(document.getElementById("exec-summary"), ctx);
+  renderScorecard(document.getElementById("panel-scorecard"), ctx);
+  renderTrend(document.getElementById("panel-trend"), ctx);
+
+  const secReturns = document.getElementById("sec-returns");
+  if (ctx.hasReturns) { secReturns.style.display = ""; renderReturnsBridge(document.getElementById("panel-returns"), ctx); }
+  else secReturns.style.display = "none";
+
+  renderMarginBySku(document.getElementById("panel-margin-sku"), ctx);
+
+  const panelChannel = document.getElementById("panel-channel");
+  if (ctx.hasMarketing) { panelChannel.style.display = ""; renderChannel(panelChannel, ctx); }
+  else panelChannel.style.display = "none";
+
+  const panelCohort = document.getElementById("panel-cohort");
+  if (ctx.hasCustomer) { panelCohort.style.display = ""; renderCohort(panelCohort, ctx); }
+  else panelCohort.style.display = "none";
+
+  const secInventory = document.getElementById("sec-inventory");
+  if (ctx.hasInventory) { secInventory.style.display = ""; renderInventory(document.getElementById("panel-inventory"), ctx); }
+  else secInventory.style.display = "none";
+
+  // Hidden-panels note
+  const hidden = [];
+  if (!ctx.hasReturns) hidden.push("Returns Margin Bridge -- map a \"Returned?\" column to unlock");
+  if (!ctx.hasMarketing) hidden.push("Channel Economics -- map a \"Marketing Channel\" column AND load a Marketing Spend file to unlock");
+  if (!ctx.hasCustomer) hidden.push("Cohort Retention Heatmap -- map a \"Customer ID\" column to unlock");
+  if (!ctx.hasInventory) hidden.push("Inventory Health -- load an Inventory Snapshots file to unlock");
+  const secHidden = document.getElementById("sec-hidden-note");
+  const body = document.getElementById("hidden-note-body");
+  if (hidden.length) {
+    secHidden.style.display = "";
+    body.innerHTML = `<strong>Showing ${5 - hidden.length} of 5 optional/conditional panels</strong> (the always-on Performance &amp; Margin panels are showing regardless). Hidden:<ul>${hidden.map(h => `<li>${h}</li>`).join("")}</ul>`;
+  } else {
+    secHidden.style.display = "none";
+  }
+
+  renderEditableTable(state);
+}
+
+/* =============================================================================
+   8. Editable data table (paginated, edits feed back into recompute)
+   ============================================================================= */
+
+const PAGE_SIZE = 25;
+let editPage = 0;
+
+function renderEditableTable(state) {
+  const wrap = document.getElementById("editable-table");
+  const txns = state.txns;
+  const totalPages = Math.max(1, Math.ceil(txns.length / PAGE_SIZE));
+  editPage = Math.min(editPage, totalPages - 1);
+  const start = editPage * PAGE_SIZE, slice = txns.slice(start, start + PAGE_SIZE);
+
+  wrap.innerHTML = "";
+  const thead = document.createElement("tr");
+  ["Date", "SKU", "Category", "Qty", "Revenue", "Cost", "Returned?", "Customer ID", "Channel"].forEach(h => {
+    const th = document.createElement("th"); th.textContent = h; thead.appendChild(th);
+  });
+  wrap.appendChild(thead);
+
+  slice.forEach(t => {
+    const tr = document.createElement("tr");
+    const cell = (val, onInput, type) => {
+      const td = document.createElement("td");
+      const inp = document.createElement("input");
+      inp.type = type || "text";
+      inp.value = val == null ? "" : val;
+      inp.addEventListener("change", () => onInput(inp.value));
+      td.appendChild(inp);
+      return td;
+    };
+    tr.appendChild(cell(t.date.toISOString().slice(0, 10), v => { const d = parseDate(v); if (d) { t.date = d; t.month = monthKey(d); } }));
+    tr.appendChild(cell(t.sku, v => t.sku = v));
+    tr.appendChild(cell(t.category, v => t.category = v));
+    tr.appendChild(cell(t.quantity, v => t.quantity = toNumber(v), "number"));
+    tr.appendChild(cell(t.revenue, v => t.revenue = toNumber(v), "number"));
+    tr.appendChild(cell(t.cost, v => t.cost = toNumber(v), "number"));
+    const tdReturn = document.createElement("td");
+    const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = t.isReturn;
+    chk.addEventListener("change", () => t.isReturn = chk.checked);
+    tdReturn.appendChild(chk); tr.appendChild(tdReturn);
+    tr.appendChild(cell(t.customerId, v => t.customerId = v || null));
+    tr.appendChild(cell(t.channel, v => t.channel = v || null));
+    wrap.appendChild(tr);
+  });
+
+  document.getElementById("page-indicator").textContent = `Page ${editPage + 1} of ${totalPages} (${txns.length} rows total)`;
+}
+
+/* =============================================================================
+   9. App state + wiring
+   ============================================================================= */
+
+const state = {
+  isDefault: true,
+  rawTxn: null, mappingTxn: null,
+  rawMkt: null, mappingMkt: null,
+  rawInv: null, mappingInv: null,
+  txns: [], mkt: [], inv: [],
+  opts: { revenuePerUnit: true, costPerUnit: true },
+};
+
+function loadDefaultDataset() {
+  const txnParsed = parseCSV(DEFAULT_DATA.orders);
+  const mktParsed = parseCSV(DEFAULT_DATA.marketing);
+  const invParsed = parseCSV(DEFAULT_DATA.inventory);
+  state.rawTxn = txnParsed; state.rawMkt = mktParsed; state.rawInv = invParsed;
+  state.mappingTxn = {
+    date: "order_date", sku: "sku_id", category: "category", quantity: "quantity",
+    revenue: "unit_price", cost: "unit_cogs", returns: "is_return", customerId: "customer_id", channel: "marketing_channel",
+  };
+  state.mappingMkt = { month: "month", channel: "channel", spend: "spend" };
+  state.mappingInv = { sku: "sku_id", month: "month", beginning: "beginning_inventory", received: "units_received", sold: "units_sold", ending: "ending_inventory" };
+  state.opts = { revenuePerUnit: true, costPerUnit: true };
+  state.isDefault = true;
+  document.getElementById("filename-transactions").textContent = "Using bundled sample: D2C fashion orders (12 months)";
+  document.getElementById("filename-marketing").textContent = "Using bundled sample: 5-channel monthly spend";
+  document.getElementById("filename-inventory").textContent = "Using bundled sample: 150-SKU monthly stock";
+  document.getElementById("toggle-revenue-per-unit").checked = true;
+  document.getElementById("toggle-cost-per-unit").checked = true;
+  applyAndRender();
+}
+
+function ingestTransactionsCSV(text, filename) {
+  const parsed = parseCSV(text);
+  state.rawTxn = parsed;
+  state.mappingTxn = guessMapping(parsed.headers, TXN_ROLES);
+  state.isDefault = false;
+  // A new transactions file almost certainly doesn't correspond to whatever
+  // marketing-spend/inventory aux data was loaded before (e.g. the bundled
+  // fashion sample's 150-SKU inventory table) -- clear both so a stale aux
+  // table can't silently render a panel that mismatches the new data.
+  state.rawMkt = null; state.mappingMkt = null; state.mkt = [];
+  state.rawInv = null; state.mappingInv = null; state.inv = [];
+  document.getElementById("filename-marketing").textContent = "No file loaded for this dataset -- upload one to unlock Channel Economics.";
+  document.getElementById("filename-inventory").textContent = "No file loaded for this dataset -- upload one to unlock Inventory Health.";
+  document.getElementById("filename-transactions").textContent = "Loaded: " + filename + " (" + parsed.rows.length + " rows)";
+  document.getElementById("toggle-revenue-per-unit").checked = false;
+  document.getElementById("toggle-cost-per-unit").checked = false;
+  state.opts.revenuePerUnit = false; state.opts.costPerUnit = false;
+  refreshMappingUI();
+  setStatus("New file loaded -- review the column mapping below, then click Apply.", false);
+}
+
+function refreshMappingUI() {
+  renderMappingTable(document.getElementById("mapping-table"), state.rawTxn.headers, TXN_ROLES, state.mappingTxn);
+  renderMappingTable(document.getElementById("mapping-table-marketing"), state.rawMkt ? state.rawMkt.headers : [], MKT_ROLES, state.mappingMkt || {});
+  renderMappingTable(document.getElementById("mapping-table-inventory"), state.rawInv ? state.rawInv.headers : [], INV_ROLES, state.mappingInv || {});
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById("mapping-status");
+  el.textContent = msg;
+  el.className = "status-msg " + (isError ? "error" : "ok");
+}
+
+function applyAndRender() {
+  refreshMappingUI();
+  const missing = TXN_ROLES.filter(r => r.required && !state.mappingTxn[r.key]);
+  if (missing.length) {
+    setStatus("Missing required mapping: " + missing.map(r => r.label).join(", "), true);
+    return;
+  }
+  state.txns = buildTransactions(state.rawTxn.rows, state.mappingTxn, state.opts);
+  if (!state.txns.length) {
+    setStatus("No rows parsed successfully -- check that Date/Quantity/Revenue/Cost columns contain valid values.", true);
+    return;
+  }
+  state.mkt = state.mappingMkt && state.mappingMkt.channel && state.mappingMkt.spend && state.rawMkt
+    ? buildMarketing(state.rawMkt.rows, state.mappingMkt) : [];
+  state.inv = state.mappingInv && state.mappingInv.sku && state.mappingInv.month && state.mappingInv.beginning && state.mappingInv.sold && state.rawInv
+    ? buildInventory(state.rawInv.rows, state.mappingInv) : [];
+  editPage = 0;
+  setStatus(`Applied: ${state.txns.length} transaction rows, ${state.mkt.length} marketing rows, ${state.inv.length} inventory rows.`, false);
+  renderAll(state);
+}
+
+function wireUI() {
+  document.getElementById("toggle-editable").addEventListener("click", () => {
+    const body = document.getElementById("editable-body");
+    const showing = body.style.display !== "none";
+    body.style.display = showing ? "none" : "block";
+    document.getElementById("toggle-editable").textContent = (showing ? "▸" : "▾") + " Edit the transactions data in-browser (what-if tweaking)";
+  });
+  document.getElementById("btn-prev-page").addEventListener("click", () => { editPage = Math.max(0, editPage - 1); renderEditableTable(state); });
+  document.getElementById("btn-next-page").addEventListener("click", () => { editPage++; renderEditableTable(state); });
+  document.getElementById("btn-add-row").addEventListener("click", () => {
+    state.txns.push({ idx: state.txns.length, date: new Date(), month: monthKey(new Date()), sku: "NEW-SKU", category: "All", quantity: 1, revenue: 0, cost: 0, isReturn: false, customerId: null, channel: null });
+    editPage = Math.floor((state.txns.length - 1) / PAGE_SIZE);
+    renderEditableTable(state);
+  });
+  document.getElementById("btn-recompute").addEventListener("click", () => renderAll(state));
+
+  document.getElementById("btn-reset-transactions").addEventListener("click", () => { editPage = 0; loadDefaultDataset(); setStatus("Reset to bundled fashion sample.", false); });
+
+  document.getElementById("file-transactions").addEventListener("change", e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => ingestTransactionsCSV(reader.result, f.name);
+    reader.readAsText(f);
+  });
+  document.getElementById("file-marketing").addEventListener("change", e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.rawMkt = parseCSV(reader.result);
+      state.mappingMkt = guessMapping(state.rawMkt.headers, MKT_ROLES);
+      document.getElementById("filename-marketing").textContent = "Loaded: " + f.name + " (" + state.rawMkt.rows.length + " rows)";
+      refreshMappingUI();
+      setStatus("Marketing spend file loaded -- review mapping, then click Apply.", false);
+    };
+    reader.readAsText(f);
+  });
+  document.getElementById("file-inventory").addEventListener("change", e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.rawInv = parseCSV(reader.result);
+      state.mappingInv = guessMapping(state.rawInv.headers, INV_ROLES);
+      document.getElementById("filename-inventory").textContent = "Loaded: " + f.name + " (" + state.rawInv.rows.length + " rows)";
+      refreshMappingUI();
+      setStatus("Inventory file loaded -- review mapping, then click Apply.", false);
+    };
+    reader.readAsText(f);
+  });
+
+  document.getElementById("toggle-revenue-per-unit").addEventListener("change", e => state.opts.revenuePerUnit = e.target.checked);
+  document.getElementById("toggle-cost-per-unit").addEventListener("change", e => state.opts.costPerUnit = e.target.checked);
+  document.getElementById("btn-apply").addEventListener("click", applyAndRender);
+}
+
+wireUI();
+loadDefaultDataset();
+</script>
+</body>
+</html>

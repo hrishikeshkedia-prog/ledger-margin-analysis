@@ -254,22 +254,29 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
   <footer class="limitations">
     <h2>Honest Limitations</h2>
     <ul>
-      <li><strong>This is a rebuilt, simplified analytics engine, not the original Python pipeline.</strong>
-        It runs entirely client-side from a single generic "cost" column per transaction rather than the
-        original's separate COGS / shipping / payment-fee breakdown, so numbers are directionally
-        consistent with (not always numerically identical to) the Stage 1-7 notebook pipeline in this
-        repository, which remains the source of truth for exact figures.</li>
-      <li><strong>Returns, if mapped, are treated as fully reversing both revenue and cost</strong> on that
-        line. The original pipeline additionally keeps a non-refundable shipping/payment-fee cost even on
-        a return; this simplified engine does not model that distinction.</li>
-      <li><strong>"After marketing cost" allocation treats every transaction row as its own purchase
-        event</strong> (spend ÷ rows-per-channel, charged flat to each row), since this tool has no
-        order-ID concept the way the original per-order-line allocation does. For orders with more than
-        one line item, this over-charges each line slightly -- directionally correct, not cent-for-cent
-        identical to the Stage 1-7 pipeline.</li>
-      <li><strong>Cohort retention, dead-stock, and channel-CAC thresholds use fixed default assumptions</strong>
-        (6-month cohort window, 3-months-available / 15%-sell-through dead-stock bar, 3.5 assumed
-        customer-lifetime orders) baked into this page's code, not exposed as UI controls.</li>
+      <li><strong>Two-tier design, on purpose.</strong> The rigorous version of this analysis is the
+        Stage 1-7 notebook pipeline in this repository (COGS, shipping, and payment-fee costs modeled
+        separately, computed in Python) -- that notebook is the source of truth for exact figures. This
+        page trades some of that precision for something the notebook can't do: run entirely in a
+        browser, load your own CSV, and redraw every chart live. It works from a single generic "cost"
+        column per transaction instead of the notebook's three-way cost breakdown, so its numbers are
+        directionally consistent with, not always numerically identical to, the notebook's.</li>
+      <li><strong>Returns reverse both revenue and cost on that line.</strong> The notebook pipeline is
+        more precise here: it keeps the non-refundable shipping/payment-fee cost on a return, since that
+        money was already spent regardless of what the customer does next. Reversing both fully is a
+        reasonable approximation for a live, single-cost-column tool -- it only diverges from the
+        notebook's number where returns and per-line fulfillment cost both matter.</li>
+      <li><strong>Marketing cost is allocated per transaction row, not per order.</strong> This engine has
+        no order-ID concept, so it divides each channel's spend evenly across the rows attributed to it
+        (spend ÷ rows-per-channel) rather than the notebook's per-order-line share. For orders with more
+        than one line item, this slightly over-charges each line -- a known, bounded approximation that
+        stays directionally correct. The exact per-order allocation lives in the notebook's
+        <code>fashion.py</code> module.</li>
+      <li><strong>Cohort window, dead-stock bar, and CAC assumptions are fixed defaults.</strong> This
+        page uses a 6-month cohort window, a 3-months-available / ≤15%-sell-through dead-stock cutoff, and
+        a 3.5-order assumed customer lifetime for LTV:CAC -- the same defaults as the notebook's
+        <code>fashion_config.py</code>, chosen as common industry conventions rather than tuned to any one
+        dataset. They're baked into this page's code, not exposed as UI controls.</li>
     </ul>
   </footer>
 

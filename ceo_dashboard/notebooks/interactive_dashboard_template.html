@@ -277,6 +277,11 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         a 3.5-order assumed customer lifetime for LTV:CAC -- the same defaults as the notebook's
         <code>fashion_config.py</code>, chosen as common industry conventions rather than tuned to any one
         dataset. They're baked into this page's code, not exposed as UI controls.</li>
+      <li><strong>Month annotations are user-supplied context, not a seasonality model.</strong> Labeling
+        a month "Diwali" or "stocking problem" doesn't separate that event's effect from ordinary
+        month-to-month seasonality the way a real forecasting model would -- one-off events (campaigns,
+        PR, stockouts) are annotated by the operator, not statistically distinguished by this tool. It's a
+        label for a human to interpret, not an estimated effect size.</li>
     </ul>
   </footer>
 
@@ -438,6 +443,7 @@ const TXN_ROLES = [
   { key: "returns", label: "Returned? (optional)", required: false, guesses: ["is_return", "returned", "return_flag", "was_returned"], note: "Unlocks the Returns Margin Bridge." },
   { key: "customerId", label: "Customer ID (optional)", required: false, guesses: ["customer_id", "customer", "cust_id", "buyer_id"], note: "Unlocks the Cohort Retention Heatmap." },
   { key: "channel", label: "Marketing Channel (optional)", required: false, guesses: ["marketing_channel", "channel", "source", "utm_source"], note: "Unlocks Channel Economics (with a Marketing Spend file)." },
+  { key: "note", label: "Note / Event (optional)", required: false, guesses: ["note", "rationale", "event", "comment", "reason"], note: "Adds a small annotation label to the matching month on the Revenue Trend chart -- what happened, not why." },
 ];
 
 // Panel tiers, in the order they're described to the user in the Data
@@ -555,6 +561,7 @@ function buildTransactions(rawRows, mapping, opts) {
       isReturn: mapping.returns ? toBool(r[mapping.returns]) : false,
       customerId: mapping.customerId && r[mapping.customerId] ? String(r[mapping.customerId]) : null,
       channel: mapping.channel && r[mapping.channel] ? String(r[mapping.channel]) : null,
+      note: mapping.note && r[mapping.note] ? String(r[mapping.note]).trim() : null,
     });
   });
   return out;
@@ -788,6 +795,24 @@ Engine.marginRiskAlerts = (txns, skuRows, channelMarginAfterSpend, hasMarketing,
     cause: r.spend > r.marginTotal ? "Marketing cost exceeds margin earned" : "Thin/negative product margin",
   }));
   return lossChannels.concat(lossSkus).sort((a, b) => a.margin - b.margin);
+};
+
+// Month-level annotations: purely descriptive, never inferential -- this
+// just surfaces whatever the operator wrote down for a month (e.g.
+// "Diwali", "influencer campaign", "stocking problem"), it does not
+// attempt to attribute a revenue change to any cause. If a month has
+// several distinct notes across its rows, all are kept (joined for the
+// hover/tap detail) but only the first is shown as the short on-chart label.
+Engine.monthlyNotes = txns => {
+  const byMonth = groupBy(txns.filter(t => t.note), t => t.month);
+  const out = new Map();
+  byMonth.forEach((rows, month) => {
+    const distinct = Array.from(new Set(rows.map(t => t.note).filter(Boolean)));
+    if (!distinct.length) return;
+    const label = distinct.length === 1 ? distinct[0] : `${distinct[0]} (+${distinct.length - 1} more)`;
+    out.set(month, { label, full: distinct.join("; "), count: distinct.length });
+  });
+  return out;
 };
 
 // Cohort retention: cohort_month = a customer's first transaction month;
@@ -1110,18 +1135,26 @@ function renderScorecard(container, ctx) {
 }
 
 function renderTrend(container, ctx) {
-  const { revenueTrend, marginTrend, cov } = ctx;
+  const { revenueTrend, marginTrend, cov, monthNotes } = ctx;
   const months = revenueTrend.map(r => r.month);
+  const hasNotes = monthNotes && monthNotes.size > 0;
   panelHeader(container, cov.cost ? "Revenue & Margin Trend" : "Revenue Trend");
   const row = subplotRow(container, "panel-row");
   row.style.display = "block";
 
   const isLast = !cov.cost;
   const c1 = subplotCol(row, "Net Revenue"); c1.style.marginBottom = cov.cost ? "6px" : "0";
-  const svg1 = makeSvg(isLast ? 220 : 170); c1.appendChild(svg1);
+  // Reserve extra top margin for the annotation dot + label when notes are
+  // mapped, so they never collide with the tallest bar.
+  const svg1Height = (isLast ? 220 : 170) + (hasNotes ? 22 : 0);
+  const svg1 = makeSvg(svg1Height); c1.appendChild(svg1);
   const vals1 = revenueTrend.map(r => r.netRevenue);
-  const f1 = drawVFrame(svg1, { yMin: 0, yMax: Math.max(...vals1, 1) * 1.1, yFormat: commas, xCategories: months, marginB: isLast ? undefined : 4, xRotate: isLast });
+  const f1 = drawVFrame(svg1, {
+    yMin: 0, yMax: Math.max(...vals1, 1) * 1.1, yFormat: commas, xCategories: months,
+    marginB: isLast ? undefined : 4, xRotate: isLast, marginT: hasNotes ? 30 : 8,
+  });
   drawBars(svg1, f1, months, vals1, () => COLORS.categorical[0]);
+  if (hasNotes) drawMonthAnnotations(svg1, f1, container, months, monthNotes);
 
   if (cov.cost) {
     const c2 = subplotCol(row, "Gross Margin %"); c2.style.marginBottom = "6px";
@@ -1140,6 +1173,41 @@ function renderTrend(container, ctx) {
   panelCaption(container, cov.cost
     ? "Three independent-axis panels (never dual-axis, since revenue and margin % are different units). Watch whether revenue growth is coming with shrinking margin per unit -- that's growth funded by discounting."
     : "Map a Cost column to also see Gross Margin % and Margin per Unit trends here.");
+
+  if (hasNotes) {
+    panelCaption(container, "Annotations reflect user-supplied context, not inferred causes -- the dashboard shows what changed and leaves why to the operator.");
+  }
+}
+
+// Draws a small marker + short label above the matching month's bar on the
+// Net Revenue chart, for every month that has a mapped Note/Event. Purely
+// additive: shows WHAT the operator said happened, never an inferred cause.
+// Full text on hover (native SVG <title>) and on click/tap (writes into a
+// detail line under the chart, for touch devices where hover doesn't fire).
+function drawMonthAnnotations(svg, frame, panelContainer, months, monthNotes) {
+  const detail = document.createElement("p");
+  detail.className = "chart-caption";
+  detail.style.cssText = "display:none;font-style:italic;margin:6px 0 0;";
+  panelContainer.appendChild(detail);
+
+  months.forEach(month => {
+    const note = monthNotes.get(month);
+    if (!note) return;
+    const cx = frame.xScale(month) + frame.xScale.bandwidth / 2;
+    const cy = frame.y0 - 12;
+    const g = se("g", { style: "cursor:pointer;" });
+    g.appendChild(se("circle", { cx, cy, r: 3.5, fill: COLORS.categorical[0] }));
+    const label = note.label.length > 14 ? note.label.slice(0, 13) + "…" : note.label;
+    g.appendChild(text(cx, cy - 8, label, "tick-label", { "text-anchor": "middle" }));
+    const titleEl = se("title", {});
+    titleEl.textContent = `${month}: ${note.full}`;
+    g.appendChild(titleEl);
+    g.addEventListener("click", () => {
+      detail.textContent = `${month}: ${note.full}`;
+      detail.style.display = "block";
+    });
+    svg.appendChild(g);
+  });
 }
 
 function renderReturnsBridge(container, ctx) {
@@ -1413,6 +1481,7 @@ function computeCoverage(state) {
     channel: !!m.channel,
     marketing: !!m.channel && state.mkt.length > 0,
     inventory: state.inv.length > 0,
+    note: !!m.note,
   };
   cov.marginRisk = cov.cost && cov.sku;
   return cov;
@@ -1466,13 +1535,16 @@ function computeContext(state) {
   let cohort = null;
   if (cov.customerId) cohort = Engine.cohortRetention(txns);
 
+  let monthNotes = new Map();
+  if (cov.note) monthNotes = Engine.monthlyNotes(txns);
+
   const totalSkuCount = cov.inventory ? new Set(inv.map(r => r.sku)).size
     : (cov.sku ? new Set(txns.map(t => t.sku)).size : txns.length);
 
   return {
     txns, mkt, inv, cov, revenueTrend, marginTrend, netRevenue, marginAbs, marginPct, returnsBridge,
     concentration, avgMarginPerRow, skuRows, channelMarginAfterSpend, cac, alerts, sellThroughMonthly,
-    cumulativeSellThrough, deadStock, cohort, totalSkuCount, isDefault: state.isDefault,
+    cumulativeSellThrough, deadStock, cohort, monthNotes, totalSkuCount, isDefault: state.isDefault,
   };
 }
 

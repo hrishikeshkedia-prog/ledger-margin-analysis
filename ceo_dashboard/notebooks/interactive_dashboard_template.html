@@ -251,6 +251,11 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
     <div class="chart-block" id="panel-inventory"></div>
   </section>
 
+  <section id="sec-forecast">
+    <h2>Demand Forecast</h2>
+    <div class="chart-block" id="panel-forecast"></div>
+  </section>
+
   <footer class="limitations">
     <h2>Honest Limitations</h2>
     <ul>
@@ -282,6 +287,13 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         month-to-month seasonality the way a real forecasting model would -- one-off events (campaigns,
         PR, stockouts) are annotated by the operator, not statistically distinguished by this tool. It's a
         label for a human to interpret, not an estimated effect size.</li>
+      <li><strong>The forecast only claims seasonality it can actually back up.</strong> A calendar month
+        is only treated as seasonal if it repeats across at least 2 distinct years in your data -- with
+        one year of history (like the bundled fashion sample), every month is forecast on trend alone,
+        flagged "insufficient history to confirm seasonality," rather than extrapolating from a single
+        observed spike. The backtest error (WAPE) is computed on your own most recent 3 months, not
+        assumed from the notebook's; it will differ dataset to dataset, and months 2-3 of the 3-month
+        forecast roll forward from month 1's own estimate, so uncertainty compounds the further out it goes.</li>
     </ul>
   </footer>
 
@@ -333,6 +345,8 @@ const CONFIG = {
   returnsWarningThreshold: 0.20,  // scorecard flags Returns Cost % red above this
   ltvCacWarningThreshold: 3.0,    // scorecard flags LTV:CAC red below this
   deadStockWarningThreshold: 0.05,// scorecard flags Dead-Stock % red above this
+  forecastHoldoutMonths: 3,       // how many trailing months the live self-validation backtest holds out
+  forecastMinTrainMonths: 4,      // minimum training months required on top of the holdout (so >= 7 months total)
 };
 
 /* =============================================================================
@@ -382,6 +396,15 @@ function monthOffset(fromMonth, toMonth) {
   const [ty, tm] = toMonth.split("-").map(Number);
   return (ty - fy) * 12 + (tm - fm);
 }
+function calMonthNum(monthStr) { return Number(monthStr.split("-")[1]); }
+function calYearNum(monthStr) { return Number(monthStr.split("-")[0]); }
+function nextMonthStr(monthStr) {
+  let [y, m] = monthStr.split("-").map(Number);
+  m += 1; if (m > 12) { m = 1; y += 1; }
+  return y + "-" + String(m).padStart(2, "0");
+}
+const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function monthName(monthStr) { return MONTH_NAMES[calMonthNum(monthStr)]; }
 function groupBy(arr, keyFn) {
   const out = new Map();
   for (const item of arr) {
@@ -894,6 +917,95 @@ Engine.deadStock = inv => {
   return { nEligible: eligible.length, nDead: dead.length, pct: eligible.length ? dead.length / eligible.length : NaN, deadSkuIds: new Set(dead.map(r => r.sku)) };
 };
 
+// ---------------------------------------------------------------------------
+// Demand/revenue forecast -- the notebook's Stage 6 method (trailing
+// moving-average trend x a seasonal multiplier), ported to run client-side
+// on whatever monthly series the loaded data supports. See CONFIG for the
+// two tunables (FORECAST_MIN_MONTHS, FORECAST_HOLDOUT_MONTHS).
+// ---------------------------------------------------------------------------
+
+// Monthly net units sold (returns excluded). Only meaningful -- and only
+// ever shown -- when Quantity is genuinely mapped, not defaulted to 1; a
+// caller must gate on cov.quantity before using this, since a defaulted
+// quantity=1 per row would silently masquerade as real per-unit demand.
+Engine.unitsTrend = txns => {
+  const byMonth = groupBy(txns, t => t.month);
+  return sortedKeys(byMonth).map(month => ({ month, value: sum(byMonth.get(month), t => t.isReturn ? 0 : t.quantity) }));
+};
+
+// Seasonal index per calendar month, computed the honest way: a calendar
+// month's index is only "confirmed" if it appears in >= 2 distinct years of
+// the series (i.e. the pattern actually repeated), matching the hard rule
+// in this project's Honest Limitations posture -- never assert seasonality
+// a dataset can't support. Formula: index = mean(actual values in that
+// calendar month) / mean(all values in the series) -- values above 1 are an
+// uptick, below 1 a dip. Unconfirmed months get index 1.0 (no adjustment).
+Engine.seasonalIndex = series => {
+  const byCalMonth = new Map();
+  series.forEach(r => {
+    const cm = calMonthNum(r.month);
+    if (!byCalMonth.has(cm)) byCalMonth.set(cm, []);
+    byCalMonth.get(cm).push({ year: calYearNum(r.month), value: r.value });
+  });
+  const overallMean = series.length ? sum(series, r => r.value) / series.length : 0;
+  const idx = new Map();
+  byCalMonth.forEach((rows, cm) => {
+    const nYears = new Set(rows.map(r => r.year)).size;
+    const mean = sum(rows, r => r.value) / rows.length;
+    idx.set(cm, { value: overallMean ? mean / overallMean : 1, confirmed: nYears >= 2, nYears });
+  });
+  return { idx, overallMean };
+};
+
+// Rolling trend + seasonal forecast: the trend for each forecasted month is
+// a 3-month trailing average of the DE-seasonalized recent history (dividing
+// out any confirmed seasonal index before averaging, so a past seasonal
+// spike doesn't inflate the trend the way a naive moving average would --
+// the same de-seasonalization fix the notebook's forecast.py applies), then
+// re-seasonalized by the target month's own index (1.0 if unconfirmed).
+// Forecasting more than one month past the available data rolls forward
+// using its own just-forecasted (de-seasonalized) values once actuals run out.
+Engine.rollingForecast = (series, seasonalIdx, nAhead) => {
+  const deseason = r => {
+    const s = seasonalIdx.idx.get(calMonthNum(r.month));
+    const factor = (s && s.confirmed) ? s.value : 1;
+    return factor ? r.value / factor : r.value;
+  };
+  let window = series.slice(-3).map(deseason);
+  let lastMonth = series[series.length - 1].month;
+  const out = [];
+  for (let step = 0; step < nAhead; step++) {
+    const targetMonth = nextMonthStr(lastMonth);
+    const trend = sum(window.slice(-3), v => v) / Math.min(3, window.length);
+    const s = seasonalIdx.idx.get(calMonthNum(targetMonth));
+    const confirmed = !!(s && s.confirmed);
+    const factor = confirmed ? s.value : 1;
+    out.push({ month: targetMonth, value: Math.max(0, trend * factor), seasonalConfirmed: confirmed, seasonalFactor: factor, seasonalNYears: s ? s.nYears : 0 });
+    window.push(trend);
+    lastMonth = targetMonth;
+  }
+  return out;
+};
+
+// Live self-validation: hold out the last `nHoldout` months, fit the
+// seasonal index and trend on everything BEFORE that (never on the holdout
+// itself -- no leakage), forecast the holdout, and report WAPE = sum(|actual
+// - forecast|) / sum(|actual|) over the holdout window (an aggregate error,
+// robust to any single near-zero month, unlike a per-month average % error).
+// Returns null if there isn't enough history to hold out `nHoldout` months
+// AND still have a meaningful training window -- callers must show "not
+// enough history," never a fabricated accuracy number, in that case.
+Engine.backtestWAPE = (series, nHoldout) => {
+  if (series.length < nHoldout + CONFIG.forecastMinTrainMonths) return null;
+  const train = series.slice(0, series.length - nHoldout);
+  const holdout = series.slice(series.length - nHoldout);
+  const seasonalIdx = Engine.seasonalIndex(train);
+  const forecasts = Engine.rollingForecast(train, seasonalIdx, nHoldout);
+  let errSum = 0, actSum = 0;
+  for (let i = 0; i < nHoldout; i++) { errSum += Math.abs(holdout[i].value - forecasts[i].value); actSum += Math.abs(holdout[i].value); }
+  return { wape: actSum ? errSum / actSum : NaN, nTrainMonths: train.length, forecasts, holdout };
+};
+
 /* =============================================================================
    5. SVG chart primitives
    ============================================================================= */
@@ -1399,6 +1511,84 @@ function renderCohort(container, ctx) {
   panelCaption(container, `Retention drops after month 0 (avg ~${fmtPct0(avgM1)} by month 1 across cohorts) -- offset 0 is always 100% by construction.`);
 }
 
+function renderForecast(container, ctx) {
+  const { forecast, cov } = ctx;
+  panelHeader(container, "Demand Forecast — Next 3 Months");
+
+  if (forecast.tooThin) {
+    const p = document.createElement("p");
+    p.className = "chart-caption";
+    p.style.margin = "4px 0";
+    p.textContent = `Not enough date history to forecast -- this needs at least ${forecast.minMonths} months of data ` +
+      `(you currently have ${forecast.monthsAvailable}). Nothing else is required beyond Date + Revenue -- ` +
+      `load more history to unlock this rather than seeing a hopeful line drawn on too little data.`;
+    container.appendChild(p);
+    return;
+  }
+
+  const { revenueSeries, revBacktest, revForward, unitsForward } = forecast;
+
+  // Chart: historical bars, then 3 forecast bars in a visually distinct
+  // lighter shade (never the same color as an actual), x-labeled "(f)".
+  const histMonths = revenueSeries.map(r => r.month);
+  const histVals = revenueSeries.map(r => r.value);
+  const fCats = revForward.map(f => f.month + " (f)");
+  const fVals = revForward.map(f => f.value);
+  const allCats = histMonths.concat(fCats);
+  const allVals = histVals.concat(fVals);
+  const svg = makeSvg(220);
+  container.appendChild(svg);
+  const frame = drawVFrame(svg, { yMin: 0, yMax: Math.max(...allVals, 1) * 1.15, yFormat: commas, xCategories: allCats, xRotate: true });
+  drawBars(svg, frame, allCats, allVals, (v, i) => i < histMonths.length ? COLORS.categorical[0] : COLORS.sequentialBlue[1], v => commas(v));
+
+  // Live self-validation headline -- computed on the user's own held-out
+  // months, never a fabricated accuracy figure.
+  const wapeOk = revBacktest && isFinite(revBacktest.wape);
+  const wapeText = wapeOk
+    ? `On your last ${CONFIG.forecastHoldoutMonths} months, this forecast was off by ~${fmtPct0(revBacktest.wape)} on average (WAPE).`
+    : "Your data has enough months to attempt a backtest, but the held-out months summed to zero, so no reliable error estimate could be computed.";
+  const wapeP = document.createElement("p");
+  wapeP.style.cssText = "font-size:13px;font-weight:600;margin:8px 0 0;";
+  wapeP.textContent = wapeText;
+  container.appendChild(wapeP);
+
+  // Next-3-months table, with an honest per-month seasonality note.
+  const rows = revForward.map((f, i) => {
+    const seasonNote = f.seasonalConfirmed
+      ? `${monthName(f.month)} pattern confirmed across ${f.seasonalNYears} prior years (×${f.seasonalFactor.toFixed(2)})`
+      : "insufficient history to confirm seasonality -- flat trend used";
+    const unitsCell = unitsForward ? `<td class="num">${commas(unitsForward[i].value)}</td>` : "";
+    return `<tr><td>${f.month}</td><td class="num">${fmtMoney0(f.value)}</td>${unitsCell}<td>${seasonNote}</td></tr>`;
+  }).join("");
+  const table = document.createElement("table");
+  table.className = "data-table";
+  table.style.marginTop = "10px";
+  table.innerHTML = `<thead><tr><th>Month</th><th>Forecast Revenue</th>${unitsForward ? "<th>Forecast Units</th>" : ""}<th>Seasonality</th></tr></thead><tbody>${rows}</tbody>`;
+  container.appendChild(table);
+
+  if (!unitsForward && !cov.quantity) {
+    const note = document.createElement("p");
+    note.className = "table-note";
+    note.textContent = "This forecasts revenue only -- map a Quantity column to also forecast unit demand.";
+    container.appendChild(note);
+  }
+
+  // Plain-language, CEO-facing caption -- the one line that matters if
+  // nothing else on the panel gets read.
+  const totalForecastRevenue = sum(revForward, f => f.value);
+  const confirmedMonths = revForward.filter(f => f.seasonalConfirmed);
+  let seasonalPhrase;
+  if (confirmedMonths.length) {
+    const strongest = confirmedMonths.slice().sort((a, b) => Math.abs(b.seasonalFactor - 1) - Math.abs(a.seasonalFactor - 1))[0];
+    const direction = strongest.seasonalFactor > 1 ? "uptick" : "dip";
+    seasonalPhrase = `a ${monthName(strongest.month)} ${direction} confirmed across ${strongest.seasonalNYears} prior years`;
+  } else {
+    seasonalPhrase = "no seasonal pattern that could be confirmed yet (needs at least 2 years of history for the same calendar month)";
+  }
+  const wapePhrase = wapeOk ? `~${fmtPct0(revBacktest.wape)}` : "not available on this data";
+  panelCaption(container, `Expected revenue next 3 months: ${fmtCr(totalForecastRevenue)} total. Based on your trend and ${seasonalPhrase}. Typical error: ${wapePhrase}.`);
+}
+
 /* =============================================================================
    7. Executive summary + panel orchestration (graceful degradation)
    ============================================================================= */
@@ -1538,13 +1728,38 @@ function computeContext(state) {
   let monthNotes = new Map();
   if (cov.note) monthNotes = Engine.monthlyNotes(txns);
 
+  // Demand/revenue forecast (see Engine.rollingForecast/backtestWAPE above).
+  // Gated purely on how many months of core data are available -- not on any
+  // optional column -- since revenue alone is enough to forecast revenue.
+  // Units are forecast too, but ONLY when Quantity is genuinely mapped
+  // (cov.quantity), never from the default qty=1 fallback other panels use.
+  const minMonths = CONFIG.forecastHoldoutMonths + CONFIG.forecastMinTrainMonths;
+  let forecast;
+  if (revenueTrend.length < minMonths) {
+    forecast = { tooThin: true, monthsAvailable: revenueTrend.length, minMonths };
+  } else {
+    const revenueSeries = revenueTrend.map(r => ({ month: r.month, value: r.netRevenue }));
+    const revBacktest = Engine.backtestWAPE(revenueSeries, CONFIG.forecastHoldoutMonths);
+    const revForward = Engine.rollingForecast(revenueSeries, Engine.seasonalIndex(revenueSeries), 3);
+    let unitsSeries = null, unitsBacktest = null, unitsForward = null;
+    if (cov.quantity) {
+      unitsSeries = Engine.unitsTrend(txns);
+      unitsBacktest = Engine.backtestWAPE(unitsSeries, CONFIG.forecastHoldoutMonths);
+      unitsForward = Engine.rollingForecast(unitsSeries, Engine.seasonalIndex(unitsSeries), 3);
+    }
+    forecast = {
+      tooThin: false, monthsAvailable: revenueTrend.length, revenueSeries, revBacktest, revForward,
+      unitsSeries, unitsBacktest, unitsForward,
+    };
+  }
+
   const totalSkuCount = cov.inventory ? new Set(inv.map(r => r.sku)).size
     : (cov.sku ? new Set(txns.map(t => t.sku)).size : txns.length);
 
   return {
     txns, mkt, inv, cov, revenueTrend, marginTrend, netRevenue, marginAbs, marginPct, returnsBridge,
     concentration, avgMarginPerRow, skuRows, channelMarginAfterSpend, cac, alerts, sellThroughMonthly,
-    cumulativeSellThrough, deadStock, cohort, monthNotes, totalSkuCount, isDefault: state.isDefault,
+    cumulativeSellThrough, deadStock, cohort, monthNotes, forecast, totalSkuCount, isDefault: state.isDefault,
   };
 }
 
@@ -1564,7 +1779,7 @@ function renderAll(state) {
     // exactly what to map. Just clear every panel and stop.
     perfSection.style.display = "none";
     document.getElementById("exec-summary").innerHTML = "";
-    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory"].forEach(id => {
+    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast"].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = "none";
     });
     renderEditableTable(state);
@@ -1601,6 +1816,12 @@ function renderAll(state) {
   const secInventory = document.getElementById("sec-inventory");
   if (ctx.cov.inventory) { secInventory.style.display = ""; renderInventory(document.getElementById("panel-inventory"), ctx); }
   else secInventory.style.display = "none";
+
+  // Forecast is always attempted once cov.core holds -- it isn't gated by
+  // any optional column, only by how many months of history exist, and
+  // renderForecast() itself shows the "not enough history" message inline.
+  document.getElementById("sec-forecast").style.display = "";
+  renderForecast(document.getElementById("panel-forecast"), ctx);
 
   renderEditableTable(state);
 }

@@ -170,10 +170,19 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         </div>
         <div class="upload-card">
           <h4>Cost Breakdown (optional)</h4>
-          <p>Input type + % of cost (e.g. "USD-linked fabric, 35%"). Pre-fills a suggested exposure % on
-            the External Cost Sensitivity panel -- still fully editable, never used automatically.</p>
+          <p>Input type + % of cost (e.g. "Polyester Fabric, 35%"). Auto-matched against a built-in
+            commodity-linkage library on the External Cost Sensitivity panel -- exposure % comes from
+            your data, driver + pass-through default come from the library, everything stays editable.</p>
           <input type="file" id="file-cost-breakdown" accept=".csv">
           <div class="filename" id="filename-cost-breakdown">No file loaded -- optional, unlocks a suggested starting point only.</div>
+        </div>
+        <div class="upload-card">
+          <h4>Macro Prices (optional)</h4>
+          <p>Month + crude price and/or USD/INR rate. Lets the External Cost Sensitivity panel suggest a
+            price-move % (latest vs. a month you pick) for factors the library links to that series --
+            still just a scenario, never auto-applied.</p>
+          <input type="file" id="file-macro" accept=".csv">
+          <div class="filename" id="filename-macro">No file loaded -- optional, unlocks move % suggestions only.</div>
         </div>
       </div>
 
@@ -190,6 +199,8 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         <table class="mapping-table" id="mapping-table-inventory"></table>
         <h3 id="mapping-cost-breakdown-title">Column mapping — Cost Breakdown</h3>
         <table class="mapping-table" id="mapping-table-cost-breakdown"></table>
+        <h3 id="mapping-macro-title">Column mapping — Macro Prices</h3>
+        <table class="mapping-table" id="mapping-table-macro"></table>
         <div class="action-row">
           <button class="btn btn-primary" id="btn-apply" type="button">Apply mapping &amp; redraw dashboard</button>
           <span class="status-msg" id="mapping-status"></span>
@@ -318,7 +329,17 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         It also never infers that any historical cost change WAS caused by an external factor; it only
         computes what hypothetical moves would do to margin from today's numbers. Each factor is assumed
         to hit its own distinct, non-overlapping slice of cost -- the panel warns, but does not block, if
-        the exposure percentages entered across factors add up to more than 100%.</li>
+        the exposure percentages entered across factors add up to more than 100%. With a Cost Breakdown
+        file, each cost component is matched by name against a small built-in Commodity Linkage Library
+        (polyester/synthetic fabric, cotton, plastics/packaging, imported dyes/chemicals, domestic labour,
+        freight) to suggest a driver and a pass-through multiplier -- these are curated, generic reference
+        defaults for a D2C goods business, never a measured elasticity and never derived by regressing this
+        business's own cost history against any macro series. Only the exposure % (each component's actual
+        share of total cost) is real data; every pass-through is a starting assumption, labelled as such,
+        and fully editable. A component whose name doesn't match the library is shown as "Not linked to
+        library" rather than assigned a guessed driver. If a Macro Prices file is also supplied, the panel
+        can suggest a price move % from the latest value vs. a baseline month the CEO picks -- still just a
+        typed-in scenario, never an auto-applied prediction.</li>
     </ul>
   </footer>
 
@@ -529,6 +550,86 @@ const CBRK_ROLES = [
   { key: "inputType", label: "Input Type", required: true, guesses: ["input_type", "cost_type", "component", "cost_component", "category"] },
   { key: "pctOfCost", label: "% of Cost", required: true, guesses: ["pct_of_cost", "percent", "pct", "share", "weight", "percentage"] },
 ];
+// Optional aux table: a macro price series (crude, USD/INR) the External
+// Cost Sensitivity panel can use to SUGGEST a price-move % (latest vs. a
+// user-picked baseline month) -- still just a scenario the CEO can
+// overwrite, never an auto-applied prediction. Entirely optional; the
+// what-if rows work fine with hand-typed moves if this isn't loaded.
+const MACRO_ROLES = [
+  { key: "month", label: "Month", required: true, guesses: ["month", "period", "date"] },
+  { key: "crude", label: "Crude Price (optional)", required: false, guesses: ["crude", "crude_oil", "oil_price", "brent"] },
+  { key: "usd", label: "USD/INR Rate (optional)", required: false, guesses: ["usd", "usd_inr", "fx", "exchange_rate", "dollar"] },
+];
+
+// ---------------------------------------------------------------------------
+// Commodity Linkage Library (External Cost Sensitivity panel)
+// ---------------------------------------------------------------------------
+// A CURATED REFERENCE, not a measurement. Every pass-through value here is a
+// generic, published-rule-of-thumb-style DEFAULT for "how much of a 1%
+// move in the macro driver typically shows up in this input's cost" -- it
+// is never derived by regressing this business's own cost history against
+// any macro series (that would overfit trivially on a handful of months
+// and dress up noise as a measured elasticity). It exists so a non-expert
+// CEO doesn't have to already know that, say, polyester fabric is a
+// petroleum derivative -- every number is visibly labeled a default and is
+// fully overridable per row. Edit this table directly to adjust the
+// defaults for your industry; it's plain data, not logic.
+const COMMODITY_LINKAGE_LIBRARY = [
+  {
+    material: "Polyester / Synthetic Fabric",
+    matchKeywords: ["polyester", "synthetic fabric", "synthetic", "nylon", "poly fabric"],
+    driver: "Crude + USD", macroSeries: ["crude", "usd"],
+    passThrough: { low: 0.3, mid: 0.5, high: 0.7 },
+    rationale: "Petroleum-derived; also import-priced.",
+  },
+  {
+    material: "Cotton Fabric",
+    matchKeywords: ["cotton"],
+    driver: "Cotton Price Index", macroSeries: [],
+    passThrough: { low: 0.5, mid: 0.7, high: 0.9 },
+    rationale: "Direct commodity input.",
+  },
+  {
+    material: "Plastics / Packaging",
+    matchKeywords: ["plastic", "packaging", "poly bag", "pp bag"],
+    driver: "Crude", macroSeries: ["crude"],
+    passThrough: { low: 0.2, mid: 0.4, high: 0.6 },
+    rationale: "Petroleum-derived.",
+  },
+  {
+    material: "Imported Dyes / Chemicals",
+    matchKeywords: ["dye", "chemical", "imported dye", "import chemical"],
+    driver: "USD (+ Crude)", macroSeries: ["usd", "crude"],
+    passThrough: { low: 0.3, mid: 0.5, high: 0.7 },
+    rationale: "Import-priced.",
+  },
+  {
+    material: "Domestic Labour / CMT",
+    matchKeywords: ["labour", "labor", "cmt", "wage", "stitching"],
+    driver: "None", macroSeries: [],
+    passThrough: { low: 0, mid: 0, high: 0 },
+    rationale: "Not commodity-linked; wage-driven.",
+  },
+  {
+    material: "Freight / Logistics",
+    matchKeywords: ["freight", "logistic", "shipping", "transport"],
+    driver: "Crude", macroSeries: ["crude"],
+    passThrough: { low: 0.3, mid: 0.5, high: 0.7 },
+    rationale: "Fuel-driven.",
+  },
+];
+
+// Matches a cost-breakdown input-type label against the library by
+// substring keyword match (case/spacing-insensitive). Returns the matched
+// entry or null -- callers must show "unlinked," never guess a driver for
+// an unmatched component.
+function matchCommodityLinkage(label) {
+  const norm = normHeader(label);
+  for (const entry of COMMODITY_LINKAGE_LIBRARY) {
+    if (entry.matchKeywords.some(k => norm.includes(normHeader(k)))) return entry;
+  }
+  return null;
+}
 
 function normHeader(h) { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ""); }
 function guessMapping(headers, roleDefs) {
@@ -656,6 +757,17 @@ function buildCostBreakdown(rawRows, mapping) {
     out.push({ inputType, pctOfCost });
   });
   return out;
+}
+function buildMacroPrices(rawRows, mapping) {
+  const out = [];
+  rawRows.forEach(r => {
+    const month = mapping.month && r[mapping.month] ? String(r[mapping.month]).trim() : null;
+    const crude = mapping.crude ? toNumber(r[mapping.crude]) : NaN;
+    const usd = mapping.usd ? toNumber(r[mapping.usd]) : NaN;
+    if (!month || (!isFinite(crude) && !isFinite(usd))) return;
+    out.push({ month, crude, usd });
+  });
+  return out.sort((a, b) => a.month < b.month ? -1 : 1);
 }
 
 /* =============================================================================
@@ -1768,11 +1880,21 @@ function renderForecast(container, ctx) {
 // only does the arithmetic on a scenario the CEO sets. Three tiers, chosen
 // automatically from what the loaded data contains:
 //   Tier 1 -- no Cost mapped: disabled state, no numbers at all.
-//   Tier 2 -- Cost mapped, no breakdown file: exposure % starts at 0 and is
-//     entirely user-supplied -- never inferred from the data.
-//   Tier 3 -- a Cost Breakdown file is also loaded: its rows only PRE-FILL
-//     the exposure % (still fully editable) when the CEO picks one from a
-//     dropdown; the underlying math is identical to Tier 2.
+//   Tier 2 -- Cost mapped, no breakdown file: one row, 0% exposure,
+//     entirely user-supplied -- never inferred from the data, never
+//     matched against the commodity library (a typed label isn't measured
+//     data, so it's never auto-linked).
+//   Tier 3 -- a Cost Breakdown file is also loaded: one row PER breakdown
+//     entry. Exposure % is that entry's real share of cost (measured --
+//     trustworthy). Each entry's label is matched against
+//     COMMODITY_LINKAGE_LIBRARY by keyword; a match pre-fills a driver name
+//     and a default pass-through (a generic assumption, visibly labeled
+//     and fully editable); no match leaves the row explicitly "not linked"
+//     with pass-through defaulting to 1.0, manual -- never guessed.
+// Combined math (unchanged in shape, extended with pass-through):
+//   costChange = sum_i( totalCost * exposure_i/100 * move_i/100 * passThrough_i )
+// A manual/unlinked row's pass-through defaults to 1.0 (a straight 1:1
+// pass-through), which reproduces the pre-library behavior exactly.
 function renderSensitivity(container, ctx) {
   const { cov } = ctx;
   panelHeader(container, "External Cost Sensitivity (What-If)");
@@ -1790,26 +1912,31 @@ function renderSensitivity(container, ctx) {
   const totalCost = ctx.netRevenue - ctx.marginAbs;
   const baseMarginPct = totalRevenue ? (totalRevenue - totalCost) / totalRevenue : 0;
   const hasBreakdown = cov.costBreakdown && ctx.costBreakdown && ctx.costBreakdown.length > 0;
+  const hasMacro = cov.macro && ctx.macro && ctx.macro.length > 0;
 
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
   container.appendChild(wrap);
 
-  // Factor rows -- fresh every render. Tier 3 (a Cost Breakdown file
-  // loaded) pre-fills one row per breakdown entry as a SUGGESTED starting
-  // point; every field stays fully editable and nothing here is inferred
-  // from the data in Tier 2 (no breakdown -- a single row starts at 0%,
-  // entirely user-set).
-  let rows = hasBreakdown
-    ? ctx.costBreakdown.map(r => ({ label: r.inputType, exposure: Math.max(0, Math.min(100, r.pctOfCost)), move: 5 }))
-    : [{ label: "USD", exposure: 0, move: 5 }];
+  function makeRow(label, exposure, exposureSource, driver, passThroughMid, passThroughSource, linked, range, rationale, macroSeries) {
+    return {
+      label, exposure, exposureSource, move: 5,
+      passThrough: passThroughMid, passThroughSource, driver, linked,
+      passThroughRange: range || null, rationale: rationale || null, macroSeries: macroSeries || [],
+    };
+  }
 
-  const rowsHeader = document.createElement("div");
-  rowsHeader.style.cssText = "display:grid;grid-template-columns:1.6fr 1fr 1.2fr 32px;gap:10px;font-size:11px;color:var(--ink-muted);margin-bottom:6px;";
-  ["Factor", "% of cost exposed", "Assumed price move, %", ""].forEach(t => {
-    const s = document.createElement("div"); s.textContent = t; rowsHeader.appendChild(s);
-  });
-  wrap.appendChild(rowsHeader);
+  // Factor rows -- fresh every render. See the function-level comment above
+  // for exactly what's measured vs. assumed in each tier.
+  let rows = hasBreakdown
+    ? ctx.costBreakdown.map(r => {
+        const match = matchCommodityLinkage(r.inputType);
+        const exposure = Math.max(0, Math.min(100, r.pctOfCost));
+        return match
+          ? makeRow(r.inputType, exposure, "measured", match.driver, match.passThrough.mid, "library", true, match.passThrough, match.rationale, match.macroSeries)
+          : makeRow(r.inputType, exposure, "measured", null, 1, "manual", false);
+      })
+    : [makeRow("USD", 0, "manual", null, 1, "manual", false)];
 
   const rowsContainer = document.createElement("div");
   wrap.appendChild(rowsContainer);
@@ -1819,7 +1946,7 @@ function renderSensitivity(container, ctx) {
   addBtn.textContent = "+ Add factor";
   addBtn.style.margin = "4px 0 16px";
   addBtn.addEventListener("click", () => {
-    rows.push({ label: `Factor ${rows.length + 1}`, exposure: 0, move: 5 });
+    rows.push(makeRow(`Factor ${rows.length + 1}`, 0, "manual", null, 1, "manual", false));
     renderRows();
   });
   wrap.appendChild(addBtn);
@@ -1840,35 +1967,127 @@ function renderSensitivity(container, ctx) {
     return t;
   }
 
+  function fieldCol(labelText) {
+    const w = document.createElement("div");
+    const l = document.createElement("label");
+    l.style.cssText = "font-size:11px;color:var(--ink-muted);display:block;margin-bottom:3px;";
+    l.textContent = labelText;
+    w.appendChild(l);
+    return w;
+  }
+  function provenanceNote(text, isAssumption) {
+    const p = document.createElement("div");
+    p.style.cssText = `font-size:10.5px;margin-top:3px;color:${isAssumption ? "#8a5a00" : "var(--good)"};`;
+    p.textContent = text;
+    return p;
+  }
+
   function renderRows() {
     rowsContainer.innerHTML = "";
     rows.forEach((row, i) => {
-      const r = document.createElement("div");
-      r.style.cssText = "display:grid;grid-template-columns:1.6fr 1fr 1.2fr 32px;gap:10px;align-items:center;margin-bottom:8px;";
+      const card = document.createElement("div");
+      card.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--page);";
 
+      // Header: label, driver/unlinked badge, remove button.
+      const head = document.createElement("div");
+      head.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;";
       const labelInput = document.createElement("input");
       labelInput.type = "text"; labelInput.value = row.label;
-      labelInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+      labelInput.style.cssText = "flex:1;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;font-weight:600;";
       labelInput.addEventListener("input", () => { row.label = labelInput.value; recompute(); });
+      const badge = document.createElement("span");
+      badge.style.cssText = `font-size:11px;font-weight:600;padding:3px 8px;border-radius:10px;white-space:nowrap;` +
+        (row.linked ? "background:#e8f3ff;color:var(--accent);" : "background:#f0efec;color:var(--ink-muted);");
+      badge.textContent = row.linked ? `Driver: ${row.driver}` : "Not linked to library";
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button"; removeBtn.textContent = "×"; removeBtn.title = "Remove this factor";
+      removeBtn.style.cssText = "border:1px solid var(--grid);background:var(--surface);border-radius:4px;cursor:pointer;" +
+        "width:28px;height:28px;color:var(--critical);font-weight:700;font-size:15px;line-height:1;flex-shrink:0;";
+      removeBtn.addEventListener("click", () => { rows.splice(i, 1); renderRows(); });
+      head.appendChild(labelInput); head.appendChild(badge); head.appendChild(removeBtn);
+      card.appendChild(head);
 
+      if (row.linked && row.rationale) {
+        const rationaleP = document.createElement("div");
+        rationaleP.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:-4px 0 10px;";
+        rationaleP.textContent = `${row.rationale} Library default pass-through range: ${row.passThroughRange.low}-${row.passThroughRange.high}.`;
+        card.appendChild(rationaleP);
+      }
+
+      // Three fields: exposure, price move (+ optional macro prefill), pass-through.
+      const fieldsRow = document.createElement("div");
+      fieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;";
+      card.appendChild(fieldsRow);
+
+      const expCol = fieldCol("% of cost exposed");
       const expInput = document.createElement("input");
       expInput.type = "number"; expInput.min = "0"; expInput.max = "100"; expInput.value = String(row.exposure);
       expInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
       expInput.addEventListener("input", () => { row.exposure = Number(expInput.value) || 0; recompute(); });
+      expCol.appendChild(expInput);
+      expCol.appendChild(provenanceNote(
+        row.exposureSource === "measured" ? "Exposure: from your cost data." : "Exposure: manual entry.",
+        row.exposureSource !== "measured"));
+      fieldsRow.appendChild(expCol);
 
+      const moveCol = fieldCol("Assumed price move, %");
       const moveInput = document.createElement("input");
       moveInput.type = "number"; moveInput.step = "0.5"; moveInput.value = String(row.move);
       moveInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
       moveInput.addEventListener("input", () => { row.move = Number(moveInput.value) || 0; recompute(); });
+      moveCol.appendChild(moveInput);
+      if (hasMacro && row.macroSeries && row.macroSeries.length) {
+        const available = row.macroSeries.filter(s => ctx.macro.some(m => isFinite(m[s])));
+        if (available.length) {
+          const prefillWrap = document.createElement("div");
+          prefillWrap.style.cssText = "margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;";
+          const seriesSelect = document.createElement("select");
+          seriesSelect.style.cssText = "font-size:11px;padding:2px;border:1px solid var(--grid);border-radius:3px;";
+          available.forEach(s => {
+            const opt = document.createElement("option"); opt.value = s; opt.textContent = s === "crude" ? "Crude" : "USD/INR";
+            seriesSelect.appendChild(opt);
+          });
+          const baselineSelect = document.createElement("select");
+          baselineSelect.style.cssText = "font-size:11px;padding:2px;border:1px solid var(--grid);border-radius:3px;max-width:90px;";
+          ctx.macro.forEach(m => {
+            const opt = document.createElement("option"); opt.value = m.month; opt.textContent = m.month;
+            baselineSelect.appendChild(opt);
+          });
+          const prefillBtn = document.createElement("button");
+          prefillBtn.type = "button"; prefillBtn.className = "btn btn-small"; prefillBtn.style.fontSize = "11px"; prefillBtn.style.padding = "2px 8px";
+          prefillBtn.textContent = "Suggest move %";
+          prefillBtn.title = "Fills the move % from latest vs. the chosen baseline month -- still a scenario, edit freely.";
+          prefillBtn.addEventListener("click", () => {
+            const seriesKey = seriesSelect.value;
+            const baseRow = ctx.macro.find(m => m.month === baselineSelect.value);
+            const latestRow = ctx.macro[ctx.macro.length - 1];
+            if (baseRow && latestRow && isFinite(baseRow[seriesKey]) && isFinite(latestRow[seriesKey]) && baseRow[seriesKey]) {
+              row.move = Math.round(((latestRow[seriesKey] - baseRow[seriesKey]) / baseRow[seriesKey]) * 1000) / 10;
+              renderRows();
+            }
+          });
+          prefillWrap.appendChild(seriesSelect); prefillWrap.appendChild(baselineSelect); prefillWrap.appendChild(prefillBtn);
+          moveCol.appendChild(prefillWrap);
+        }
+      }
+      fieldsRow.appendChild(moveCol);
 
-      const removeBtn = document.createElement("button");
-      removeBtn.type = "button"; removeBtn.textContent = "×"; removeBtn.title = "Remove this factor";
-      removeBtn.style.cssText = "border:1px solid var(--grid);background:var(--surface);border-radius:4px;cursor:pointer;" +
-        "width:30px;height:30px;color:var(--critical);font-weight:700;font-size:15px;line-height:1;";
-      removeBtn.addEventListener("click", () => { rows.splice(i, 1); renderRows(); });
+      const ptCol = fieldCol("Pass-through (0-1)");
+      const ptInput = document.createElement("input");
+      ptInput.type = "number"; ptInput.min = "0"; ptInput.max = "2"; ptInput.step = "0.05"; ptInput.value = String(row.passThrough);
+      ptInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+      ptInput.addEventListener("input", () => {
+        row.passThrough = Number(ptInput.value) || 0;
+        row.passThroughSource = "manual"; // any manual edit overrides the library default, permanently for this row
+        recompute();
+      });
+      ptCol.appendChild(ptInput);
+      ptCol.appendChild(provenanceNote(
+        row.passThroughSource === "library" ? "Pass-through: generic default -- adjust for your business." : "Pass-through: manual.",
+        true));
+      fieldsRow.appendChild(ptCol);
 
-      r.appendChild(labelInput); r.appendChild(expInput); r.appendChild(moveInput); r.appendChild(removeBtn);
-      rowsContainer.appendChild(r);
+      rowsContainer.appendChild(card);
     });
     recompute();
   }
@@ -1876,13 +2095,17 @@ function renderSensitivity(container, ctx) {
   function recompute() {
     // COMBINED MATH: each factor applies to its own distinct, non-overlapping
     // slice of total cost -- costChange = sum_i( totalCost * exposure_i/100 *
-    // move_i/100 ). No factor's slice is assumed to overlap another's; see
-    // the >100%-allocated guardrail below for why that assumption matters.
+    // move_i/100 * passThrough_i ). No factor's slice is assumed to overlap
+    // another's; see the >100%-allocated guardrail below for why that
+    // assumption matters. passThrough defaults to 1.0 for any manual/
+    // unlinked row, so this reduces exactly to the pre-library formula
+    // when no row is library-linked.
     const contributions = rows.map(row => {
       const exposurePct = Math.max(0, Math.min(100, row.exposure));
+      const pt = isFinite(row.passThrough) ? row.passThrough : 1;
       const exposedCost = totalCost * (exposurePct / 100);
-      const impact = exposedCost * (row.move / 100);
-      return { label: row.label, exposure: exposurePct, move: row.move, impact };
+      const impact = exposedCost * (row.move / 100) * pt;
+      return { label: row.label, exposure: exposurePct, move: row.move, passThrough: pt, impact };
     });
     const totalExposure = sum(rows, r => Math.max(0, r.exposure));
     const costChange = sum(contributions, c => c.impact);
@@ -1912,13 +2135,13 @@ function renderSensitivity(container, ctx) {
     grid.appendChild(tile("Margin Change (₹)", (deltaRupee >= 0 ? "+" : "") + fmtMoney0(deltaRupee), deltaRupee < 0));
     outputDiv.appendChild(grid);
 
-    const activeFactors = contributions.filter(c => c.exposure > 0 && c.move !== 0);
+    const activeFactors = contributions.filter(c => c.exposure > 0 && c.move !== 0 && c.passThrough !== 0);
     const sentence = document.createElement("p");
     sentence.style.cssText = "font-size:13px;margin:6px 0 12px;";
     sentence.textContent = activeFactors.length
       ? `Combined across ${activeFactors.length} factor${activeFactors.length > 1 ? "s" : ""}: your margin ` +
         `${deltaPP < 0 ? "drops" : deltaPP > 0 ? "rises" : "stays"} from ${fmtPct1(baseMarginPct)} to ${fmtPct1(newMarginPct)}.`
-      : "Set an exposure % and price move for at least one factor above to see the combined scenario.";
+      : "Set an exposure %, price move, and pass-through for at least one factor above to see the combined scenario.";
     outputDiv.appendChild(sentence);
 
     // Per-factor contribution -- so the CEO can see which pressure hurts most.
@@ -1932,7 +2155,8 @@ function renderSensitivity(container, ctx) {
       activeFactors.forEach(c => {
         const li = document.createElement("li");
         li.style.marginBottom = "3px";
-        li.textContent = `${c.label || "(unlabeled)"} ${c.move >= 0 ? "+" : ""}${c.move}% on ${c.exposure}% of cost ` +
+        const ptSuffix = c.passThrough !== 1 ? `, ${c.passThrough} pass-through` : "";
+        li.textContent = `${c.label || "(unlabeled)"} ${c.move >= 0 ? "+" : ""}${c.move}% on ${c.exposure}% of cost${ptSuffix} ` +
           `-> ${c.impact >= 0 ? "+" : ""}${fmtMoney0(c.impact)}`;
         list.appendChild(li);
       });
@@ -1946,8 +2170,9 @@ function renderSensitivity(container, ctx) {
   disclaimer.className = "chart-caption";
   disclaimer.style.cssText = "margin-top:14px;font-style:italic;";
   disclaimer.textContent = "This is a scenario you set, not a prediction. The tool does the arithmetic; you supply the " +
-    "exposures and the moves. It never forecasts USD, crude, or any other external price, and never claims an " +
-    "external factor caused any historical cost change -- that judgment call is yours.";
+    "exposures and the moves (pass-through defaults come from a curated reference table, never from regressing your " +
+    "own cost history against any macro series). It never forecasts USD, crude, or any other external price, and " +
+    "never claims an external factor caused any historical cost change -- that judgment call is yours.";
   wrap.appendChild(disclaimer);
 }
 
@@ -2035,6 +2260,7 @@ function computeCoverage(state) {
     inventory: state.inv.length > 0,
     note: !!m.note,
     costBreakdown: state.costBreakdown.length > 0,
+    macro: state.macro.length > 0,
   };
   cov.marginRisk = cov.cost && cov.sku;
   return cov;
@@ -2123,7 +2349,7 @@ function computeContext(state) {
     txns, mkt, inv, cov, revenueTrend, marginTrend, netRevenue, marginAbs, marginPct, returnsBridge,
     concentration, avgMarginPerRow, skuRows, channelMarginAfterSpend, cac, alerts, sellThroughMonthly,
     cumulativeSellThrough, deadStock, cohort, monthNotes, forecast, totalSkuCount, isDefault: state.isDefault,
-    costBreakdown: state.costBreakdown,
+    costBreakdown: state.costBreakdown, macro: state.macro,
   };
 }
 
@@ -2271,7 +2497,8 @@ const state = {
   rawMkt: null, mappingMkt: null,
   rawInv: null, mappingInv: null,
   rawCostBreakdown: null, mappingCostBreakdown: null,
-  txns: [], mkt: [], inv: [], costBreakdown: [],
+  rawMacro: null, mappingMacro: null,
+  txns: [], mkt: [], inv: [], costBreakdown: [], macro: [],
   opts: { revenuePerUnit: true, costPerUnit: true },
 };
 
@@ -2308,9 +2535,11 @@ function ingestTransactionsCSV(text, filename) {
   state.rawMkt = null; state.mappingMkt = null; state.mkt = [];
   state.rawInv = null; state.mappingInv = null; state.inv = [];
   state.rawCostBreakdown = null; state.mappingCostBreakdown = null; state.costBreakdown = [];
+  state.rawMacro = null; state.mappingMacro = null; state.macro = [];
   document.getElementById("filename-marketing").textContent = "No file loaded for this dataset -- upload one to unlock Channel Economics.";
   document.getElementById("filename-inventory").textContent = "No file loaded for this dataset -- upload one to unlock Inventory Health.";
   document.getElementById("filename-cost-breakdown").textContent = "No file loaded -- optional, unlocks a suggested starting point only.";
+  document.getElementById("filename-macro").textContent = "No file loaded -- optional, unlocks move % suggestions only.";
   document.getElementById("filename-transactions").textContent = "Loaded: " + filename + " (" + parsed.rows.length + " rows)";
   document.getElementById("toggle-revenue-per-unit").checked = false;
   document.getElementById("toggle-cost-per-unit").checked = false;
@@ -2324,6 +2553,7 @@ function refreshMappingUI() {
   renderMappingTable(document.getElementById("mapping-table-marketing"), state.rawMkt ? state.rawMkt.headers : [], MKT_ROLES, state.mappingMkt || {});
   renderMappingTable(document.getElementById("mapping-table-inventory"), state.rawInv ? state.rawInv.headers : [], INV_ROLES, state.mappingInv || {});
   renderMappingTable(document.getElementById("mapping-table-cost-breakdown"), state.rawCostBreakdown ? state.rawCostBreakdown.headers : [], CBRK_ROLES, state.mappingCostBreakdown || {});
+  renderMappingTable(document.getElementById("mapping-table-macro"), state.rawMacro ? state.rawMacro.headers : [], MACRO_ROLES, state.mappingMacro || {});
 }
 
 function setStatus(msg, isError) {
@@ -2345,6 +2575,8 @@ function applyAndRender() {
     ? buildInventory(state.rawInv.rows, state.mappingInv) : [];
   state.costBreakdown = state.mappingCostBreakdown && state.mappingCostBreakdown.inputType && state.mappingCostBreakdown.pctOfCost && state.rawCostBreakdown
     ? buildCostBreakdown(state.rawCostBreakdown.rows, state.mappingCostBreakdown) : [];
+  state.macro = state.mappingMacro && state.mappingMacro.month && (state.mappingMacro.crude || state.mappingMacro.usd) && state.rawMacro
+    ? buildMacroPrices(state.rawMacro.rows, state.mappingMacro) : [];
   editPage = 0;
 
   if (!state.mappingTxn.date || !state.mappingTxn.revenue) {
@@ -2415,6 +2647,19 @@ function wireUI() {
       document.getElementById("filename-cost-breakdown").textContent = "Loaded: " + f.name + " (" + state.rawCostBreakdown.rows.length + " rows)";
       refreshMappingUI();
       setStatus("Cost breakdown file loaded -- review mapping, then click Apply.", false);
+    };
+    reader.readAsText(f);
+  });
+
+  document.getElementById("file-macro").addEventListener("change", e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.rawMacro = parseCSV(reader.result);
+      state.mappingMacro = guessMapping(state.rawMacro.headers, MACRO_ROLES);
+      document.getElementById("filename-macro").textContent = "Loaded: " + f.name + " (" + state.rawMacro.rows.length + " rows)";
+      refreshMappingUI();
+      setStatus("Macro prices file loaded -- review mapping, then click Apply.", false);
     };
     reader.readAsText(f);
   });

@@ -168,6 +168,13 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
           <input type="file" id="file-inventory" accept=".csv">
           <div class="filename" id="filename-inventory">Using bundled sample: 150-SKU monthly stock</div>
         </div>
+        <div class="upload-card">
+          <h4>Cost Breakdown (optional)</h4>
+          <p>Input type + % of cost (e.g. "USD-linked fabric, 35%"). Pre-fills a suggested exposure % on
+            the External Cost Sensitivity panel -- still fully editable, never used automatically.</p>
+          <input type="file" id="file-cost-breakdown" accept=".csv">
+          <div class="filename" id="filename-cost-breakdown">No file loaded -- optional, unlocks a suggested starting point only.</div>
+        </div>
       </div>
 
       <div id="mapping-section">
@@ -181,6 +188,8 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         <table class="mapping-table" id="mapping-table-marketing"></table>
         <h3 id="mapping-inventory-title">Column mapping — Inventory Snapshots</h3>
         <table class="mapping-table" id="mapping-table-inventory"></table>
+        <h3 id="mapping-cost-breakdown-title">Column mapping — Cost Breakdown</h3>
+        <table class="mapping-table" id="mapping-table-cost-breakdown"></table>
         <div class="action-row">
           <button class="btn btn-primary" id="btn-apply" type="button">Apply mapping &amp; redraw dashboard</button>
           <span class="status-msg" id="mapping-status"></span>
@@ -256,6 +265,11 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
     <div class="chart-block" id="panel-forecast"></div>
   </section>
 
+  <section id="sec-sensitivity">
+    <h2>External Cost Sensitivity</h2>
+    <div class="chart-block" id="panel-sensitivity"></div>
+  </section>
+
   <footer class="limitations">
     <h2>Honest Limitations</h2>
     <ul>
@@ -297,6 +311,12 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         months, not assumed from the notebook's -- it will differ dataset to dataset, and a single straight
         trend line fit across all of history will underfit a business whose growth rate is itself
         changing (accelerating, plateauing, a step change), the same limitation any linear-trend model has.</li>
+      <li><strong>External Cost Sensitivity is a calculator, not a forecast.</strong> It never looks up or
+        predicts a USD, crude, or any other external price -- the exposure % and the price move % are
+        always numbers the CEO types in (or, with an optional Cost Breakdown file, a suggested starting
+        point that's still fully editable), and the panel starts at 0% exposure by default. It also never
+        infers that any historical cost change WAS caused by an external factor; it only computes what a
+        hypothetical move would do to margin from today's numbers.</li>
     </ul>
   </footer>
 
@@ -498,6 +518,15 @@ const INV_ROLES = [
   { key: "sold", label: "Units Sold", required: true, guesses: ["units_sold", "sold", "units"] },
   { key: "ending", label: "Ending Stock", required: false, guesses: ["ending_inventory", "ending", "closing_stock", "end_stock"] },
 ];
+// Optional aux table for the External Cost Sensitivity panel's Tier 3: an
+// aggregate breakdown of what fraction of total cost comes from which kind
+// of input (e.g. "USD-linked fabric, 35%"). This only ever PRE-FILLS a
+// suggested exposure % on that panel -- it never drives any KPI number, and
+// the panel remains fully editable regardless.
+const CBRK_ROLES = [
+  { key: "inputType", label: "Input Type", required: true, guesses: ["input_type", "cost_type", "component", "cost_component", "category"] },
+  { key: "pctOfCost", label: "% of Cost", required: true, guesses: ["pct_of_cost", "percent", "pct", "share", "weight", "percentage"] },
+];
 
 function normHeader(h) { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ""); }
 function guessMapping(headers, roleDefs) {
@@ -613,6 +642,16 @@ function buildInventory(rawRows, mapping) {
     const ending = mapping.ending ? toNumber(r[mapping.ending]) : (isFinite(beginning) && isFinite(received) && isFinite(sold) ? beginning + received - sold : NaN);
     if (!sku || !month || !isFinite(beginning) || !isFinite(sold)) return;
     out.push({ sku, month, beginning, received: isFinite(received) ? received : 0, sold, ending: isFinite(ending) ? ending : 0 });
+  });
+  return out;
+}
+function buildCostBreakdown(rawRows, mapping) {
+  const out = [];
+  rawRows.forEach(r => {
+    const inputType = mapping.inputType && r[mapping.inputType] ? String(r[mapping.inputType]).trim() : null;
+    const pctOfCost = toNumber(r[mapping.pctOfCost]);
+    if (!inputType || !isFinite(pctOfCost)) return;
+    out.push({ inputType, pctOfCost });
   });
   return out;
 }
@@ -1721,6 +1760,172 @@ function renderForecast(container, ctx) {
   panelCaption(container, `Expected revenue next 3 months: ${fmtCr(totalForecastRevenue)} total. Based on your trend and ${seasonalPhrase}. Typical error: ${wapePhrase}.`);
 }
 
+// External Cost Sensitivity -- a WHAT-IF calculator, never a prediction. It
+// never forecasts an external price (USD, crude, or anything else) and
+// never claims an external factor caused any historical cost change; it
+// only does the arithmetic on a scenario the CEO sets. Three tiers, chosen
+// automatically from what the loaded data contains:
+//   Tier 1 -- no Cost mapped: disabled state, no numbers at all.
+//   Tier 2 -- Cost mapped, no breakdown file: exposure % starts at 0 and is
+//     entirely user-supplied -- never inferred from the data.
+//   Tier 3 -- a Cost Breakdown file is also loaded: its rows only PRE-FILL
+//     the exposure % (still fully editable) when the CEO picks one from a
+//     dropdown; the underlying math is identical to Tier 2.
+function renderSensitivity(container, ctx) {
+  const { cov } = ctx;
+  panelHeader(container, "External Cost Sensitivity (What-If)");
+
+  if (!cov.cost) {
+    const p = document.createElement("p");
+    p.className = "chart-caption";
+    p.style.margin = "4px 0";
+    p.textContent = "Add cost data to unlock cost-sensitivity analysis -- map a Cost column in Transactions.";
+    container.appendChild(p);
+    return;
+  }
+
+  const totalRevenue = ctx.netRevenue;
+  const totalCost = ctx.netRevenue - ctx.marginAbs;
+  const baseMarginPct = totalRevenue ? (totalRevenue - totalCost) / totalRevenue : 0;
+  const hasBreakdown = cov.costBreakdown && ctx.costBreakdown && ctx.costBreakdown.length > 0;
+
+  const wrap = document.createElement("div");
+  wrap.style.marginTop = "6px";
+  container.appendChild(wrap);
+
+  const controlsDiv = document.createElement("div");
+  controlsDiv.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:16px;";
+  wrap.appendChild(controlsDiv);
+
+  function fieldWrap(labelText) {
+    const w = document.createElement("div");
+    const l = document.createElement("label");
+    l.style.cssText = "font-size:12px;color:var(--ink-secondary);display:block;margin-bottom:4px;";
+    l.textContent = labelText;
+    w.appendChild(l);
+    return w;
+  }
+
+  let breakdownSelect = null;
+  if (hasBreakdown) {
+    const bWrap = fieldWrap("Cost component (from your breakdown file -- suggests a starting point only)");
+    breakdownSelect = document.createElement("select");
+    breakdownSelect.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;background:#fff;box-sizing:border-box;";
+    const customOpt = document.createElement("option");
+    customOpt.value = ""; customOpt.textContent = "— set manually —";
+    breakdownSelect.appendChild(customOpt);
+    ctx.costBreakdown.forEach((row, i) => {
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = `${row.inputType} (${row.pctOfCost}% suggested)`;
+      breakdownSelect.appendChild(opt);
+    });
+    bWrap.appendChild(breakdownSelect);
+    controlsDiv.appendChild(bWrap);
+  }
+
+  const expWrap = fieldWrap("What % of your cost is exposed?");
+  const expRow = document.createElement("div");
+  expRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+  const expSlider = document.createElement("input");
+  expSlider.type = "range"; expSlider.min = "0"; expSlider.max = "100"; expSlider.step = "1"; expSlider.value = "0";
+  expSlider.style.flex = "1";
+  const expValueLabel = document.createElement("span");
+  expValueLabel.style.cssText = "font-size:13px;font-weight:600;min-width:38px;text-align:right;";
+  expValueLabel.textContent = "0%";
+  expRow.appendChild(expSlider); expRow.appendChild(expValueLabel);
+  expWrap.appendChild(expRow);
+  controlsDiv.appendChild(expWrap);
+
+  const labelWrap = fieldWrap("Exposed to (e.g. USD, crude)");
+  const labelInput = document.createElement("input");
+  labelInput.type = "text"; labelInput.value = "USD";
+  labelInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  labelWrap.appendChild(labelInput);
+  controlsDiv.appendChild(labelWrap);
+
+  const moveWrap = fieldWrap("Assumed price move, % (negative = favorable)");
+  const moveInput = document.createElement("input");
+  moveInput.type = "number"; moveInput.value = "5"; moveInput.step = "0.5";
+  moveInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  moveWrap.appendChild(moveInput);
+  controlsDiv.appendChild(moveWrap);
+
+  const outputDiv = document.createElement("div");
+  wrap.appendChild(outputDiv);
+
+  function tile(label, value, warn) {
+    const t = document.createElement("div");
+    t.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px 10px;text-align:center;background:var(--page);";
+    const l = document.createElement("div");
+    l.style.cssText = "font-size:12px;color:var(--ink-secondary);margin-bottom:6px;";
+    l.textContent = label;
+    const v = document.createElement("div");
+    v.style.cssText = `font-size:20px;font-weight:700;color:${warn ? COLORS.status.critical : COLORS.ink.primary};`;
+    v.textContent = value;
+    t.appendChild(l); t.appendChild(v);
+    return t;
+  }
+
+  function recompute() {
+    const exposurePct = Math.max(0, Math.min(100, Number(expSlider.value) || 0));
+    expValueLabel.textContent = exposurePct + "%";
+    const movePct = Number(moveInput.value) || 0;
+    const label = labelInput.value.trim() || "this input";
+
+    // The entire model: exposurePct of total cost moves by movePct%, the
+    // rest of cost is untouched, revenue is untouched (this is a cost-side
+    // scenario only) -- no external price is looked up or predicted, both
+    // numbers above are exactly what the CEO typed in.
+    const exposedCost = totalCost * (exposurePct / 100);
+    const newTotalCost = totalCost + exposedCost * (movePct / 100);
+    const newMarginAbs = totalRevenue - newTotalCost;
+    const newMarginPct = totalRevenue ? newMarginAbs / totalRevenue : 0;
+    const deltaPP = newMarginPct - baseMarginPct;
+    const deltaRupee = newMarginAbs - (totalRevenue - totalCost);
+
+    outputDiv.innerHTML = "";
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:10px;";
+    grid.appendChild(tile("Current Margin %", fmtPct1(baseMarginPct), false));
+    grid.appendChild(tile("Scenario Margin %", fmtPct1(newMarginPct), deltaPP < 0));
+    grid.appendChild(tile("Margin Change (pp)", (deltaPP >= 0 ? "+" : "") + (deltaPP * 100).toFixed(1) + " pp", deltaPP < 0));
+    grid.appendChild(tile("Margin Change (₹)", (deltaRupee >= 0 ? "+" : "") + fmtMoney0(deltaRupee), deltaRupee < 0));
+    outputDiv.appendChild(grid);
+
+    const sentence = document.createElement("p");
+    sentence.style.cssText = "font-size:13px;margin:6px 0 0;";
+    const direction = deltaPP < 0 ? "drops" : (deltaPP > 0 ? "rises" : "stays");
+    sentence.textContent = exposurePct === 0
+      ? `Set an exposure % above to see the scenario -- right now 0% of your cost is marked as exposed, so margin is unchanged.`
+      : `If ${exposurePct}% of your cost is ${label}-linked and ${label} moves ${movePct >= 0 ? "+" : ""}${movePct}%, your margin ${direction} from ${fmtPct1(baseMarginPct)} to ${fmtPct1(newMarginPct)}.`;
+    outputDiv.appendChild(sentence);
+  }
+
+  expSlider.addEventListener("input", recompute);
+  moveInput.addEventListener("input", recompute);
+  labelInput.addEventListener("input", recompute);
+  if (breakdownSelect) {
+    breakdownSelect.addEventListener("change", () => {
+      if (breakdownSelect.value !== "") {
+        const row = ctx.costBreakdown[Number(breakdownSelect.value)];
+        expSlider.value = String(Math.max(0, Math.min(100, Math.round(row.pctOfCost))));
+        labelInput.value = row.inputType;
+      }
+      recompute();
+    });
+  }
+  recompute();
+
+  const disclaimer = document.createElement("p");
+  disclaimer.className = "chart-caption";
+  disclaimer.style.cssText = "margin-top:14px;font-style:italic;";
+  disclaimer.textContent = "This is a scenario you set, not a prediction. The tool does the math; you supply the exposure. " +
+    "It never forecasts USD, crude, or any other external price, and never claims an external factor caused any " +
+    "historical cost change -- that judgment call is yours.";
+  wrap.appendChild(disclaimer);
+}
+
 /* =============================================================================
    7. Executive summary + panel orchestration (graceful degradation)
    ============================================================================= */
@@ -1804,6 +2009,7 @@ function computeCoverage(state) {
     marketing: !!m.channel && state.mkt.length > 0,
     inventory: state.inv.length > 0,
     note: !!m.note,
+    costBreakdown: state.costBreakdown.length > 0,
   };
   cov.marginRisk = cov.cost && cov.sku;
   return cov;
@@ -1892,6 +2098,7 @@ function computeContext(state) {
     txns, mkt, inv, cov, revenueTrend, marginTrend, netRevenue, marginAbs, marginPct, returnsBridge,
     concentration, avgMarginPerRow, skuRows, channelMarginAfterSpend, cac, alerts, sellThroughMonthly,
     cumulativeSellThrough, deadStock, cohort, monthNotes, forecast, totalSkuCount, isDefault: state.isDefault,
+    costBreakdown: state.costBreakdown,
   };
 }
 
@@ -1911,7 +2118,7 @@ function renderAll(state) {
     // exactly what to map. Just clear every panel and stop.
     perfSection.style.display = "none";
     document.getElementById("exec-summary").innerHTML = "";
-    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast"].forEach(id => {
+    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast", "sec-sensitivity"].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = "none";
     });
     renderEditableTable(state);
@@ -1954,6 +2161,11 @@ function renderAll(state) {
   // renderForecast() itself shows the "not enough history" message inline.
   document.getElementById("sec-forecast").style.display = "";
   renderForecast(document.getElementById("panel-forecast"), ctx);
+
+  // Sensitivity is always attempted once cov.core holds too -- renderSensitivity()
+  // itself shows the Tier 1 disabled state inline when Cost isn't mapped.
+  document.getElementById("sec-sensitivity").style.display = "";
+  renderSensitivity(document.getElementById("panel-sensitivity"), ctx);
 
   renderEditableTable(state);
 }
@@ -2033,7 +2245,8 @@ const state = {
   rawTxn: null, mappingTxn: null,
   rawMkt: null, mappingMkt: null,
   rawInv: null, mappingInv: null,
-  txns: [], mkt: [], inv: [],
+  rawCostBreakdown: null, mappingCostBreakdown: null,
+  txns: [], mkt: [], inv: [], costBreakdown: [],
   opts: { revenuePerUnit: true, costPerUnit: true },
 };
 
@@ -2069,8 +2282,10 @@ function ingestTransactionsCSV(text, filename) {
   // table can't silently render a panel that mismatches the new data.
   state.rawMkt = null; state.mappingMkt = null; state.mkt = [];
   state.rawInv = null; state.mappingInv = null; state.inv = [];
+  state.rawCostBreakdown = null; state.mappingCostBreakdown = null; state.costBreakdown = [];
   document.getElementById("filename-marketing").textContent = "No file loaded for this dataset -- upload one to unlock Channel Economics.";
   document.getElementById("filename-inventory").textContent = "No file loaded for this dataset -- upload one to unlock Inventory Health.";
+  document.getElementById("filename-cost-breakdown").textContent = "No file loaded -- optional, unlocks a suggested starting point only.";
   document.getElementById("filename-transactions").textContent = "Loaded: " + filename + " (" + parsed.rows.length + " rows)";
   document.getElementById("toggle-revenue-per-unit").checked = false;
   document.getElementById("toggle-cost-per-unit").checked = false;
@@ -2083,6 +2298,7 @@ function refreshMappingUI() {
   renderMappingTable(document.getElementById("mapping-table"), state.rawTxn.headers, TXN_ROLES, state.mappingTxn);
   renderMappingTable(document.getElementById("mapping-table-marketing"), state.rawMkt ? state.rawMkt.headers : [], MKT_ROLES, state.mappingMkt || {});
   renderMappingTable(document.getElementById("mapping-table-inventory"), state.rawInv ? state.rawInv.headers : [], INV_ROLES, state.mappingInv || {});
+  renderMappingTable(document.getElementById("mapping-table-cost-breakdown"), state.rawCostBreakdown ? state.rawCostBreakdown.headers : [], CBRK_ROLES, state.mappingCostBreakdown || {});
 }
 
 function setStatus(msg, isError) {
@@ -2102,6 +2318,8 @@ function applyAndRender() {
     ? buildMarketing(state.rawMkt.rows, state.mappingMkt) : [];
   state.inv = state.mappingInv && state.mappingInv.sku && state.mappingInv.month && state.mappingInv.beginning && state.mappingInv.sold && state.rawInv
     ? buildInventory(state.rawInv.rows, state.mappingInv) : [];
+  state.costBreakdown = state.mappingCostBreakdown && state.mappingCostBreakdown.inputType && state.mappingCostBreakdown.pctOfCost && state.rawCostBreakdown
+    ? buildCostBreakdown(state.rawCostBreakdown.rows, state.mappingCostBreakdown) : [];
   editPage = 0;
 
   if (!state.mappingTxn.date || !state.mappingTxn.revenue) {
@@ -2159,6 +2377,19 @@ function wireUI() {
       document.getElementById("filename-inventory").textContent = "Loaded: " + f.name + " (" + state.rawInv.rows.length + " rows)";
       refreshMappingUI();
       setStatus("Inventory file loaded -- review mapping, then click Apply.", false);
+    };
+    reader.readAsText(f);
+  });
+
+  document.getElementById("file-cost-breakdown").addEventListener("change", e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.rawCostBreakdown = parseCSV(reader.result);
+      state.mappingCostBreakdown = guessMapping(state.rawCostBreakdown.headers, CBRK_ROLES);
+      document.getElementById("filename-cost-breakdown").textContent = "Loaded: " + f.name + " (" + state.rawCostBreakdown.rows.length + " rows)";
+      refreshMappingUI();
+      setStatus("Cost breakdown file loaded -- review mapping, then click Apply.", false);
     };
     reader.readAsText(f);
   });

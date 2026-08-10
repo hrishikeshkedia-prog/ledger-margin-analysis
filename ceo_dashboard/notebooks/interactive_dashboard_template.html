@@ -1082,7 +1082,18 @@ Engine.backtestWAPE = (series, nHoldout) => {
   const forecasts = Engine.rollingForecast(train, seasonalIdx, nHoldout);
   let errSum = 0, actSum = 0;
   for (let i = 0; i < nHoldout; i++) { errSum += Math.abs(holdout[i].value - forecasts[i].value); actSum += Math.abs(holdout[i].value); }
-  return { wape: actSum ? errSum / actSum : NaN, nTrainMonths: train.length, forecasts, holdout };
+  // If any held-out month's calendar month didn't have 2 confirmed prior
+  // cycles WITHIN the training window (distinct from the full series --
+  // removing the last nHoldout months for the test can strip a month's only
+  // other occurrence out of training), the honest 2-years rule correctly
+  // withholds a seasonal boost for it here even if the full dataset would
+  // otherwise confirm it. That's the rule working as intended, but it means
+  // this specific backtest understates real accuracy for a forward forecast
+  // that DOES have the full data available -- callers must flag this rather
+  // than reporting the resulting high WAPE at face value. See
+  // renderForecast()'s "Accuracy estimate limited" framing.
+  const hasUnconfirmedHoldoutMonth = forecasts.some(f => !f.seasonalConfirmed);
+  return { wape: actSum ? errSum / actSum : NaN, nTrainMonths: train.length, forecasts, holdout, hasUnconfirmedHoldoutMonth };
 };
 
 /* =============================================================================
@@ -1621,15 +1632,55 @@ function renderForecast(container, ctx) {
   drawBars(svg, frame, allCats, allVals, (v, i) => i < histMonths.length ? COLORS.categorical[0] : COLORS.sequentialBlue[1], v => commas(v));
 
   // Live self-validation headline -- computed on the user's own held-out
-  // months, never a fabricated accuracy figure.
+  // months, never a fabricated accuracy figure. If the held-out window
+  // itself landed on a month the honest 2-years rule can't confirm within
+  // that training slice, WAPE genuinely understates real accuracy (the
+  // model was denied a seasonal boost it would apply going forward, once
+  // the full data is back in play) -- flag that explicitly rather than
+  // reporting the resulting high error at face value. Never loosen the
+  // rule itself to make the number look better; only the framing changes.
   const wapeOk = revBacktest && isFinite(revBacktest.wape);
-  const wapeText = wapeOk
-    ? `On your last ${CONFIG.forecastHoldoutMonths} months, this forecast was off by ~${fmtPct0(revBacktest.wape)} on average (WAPE).`
-    : "Your data has enough months to attempt a backtest, but the held-out months summed to zero, so no reliable error estimate could be computed.";
+  let wapeText;
+  if (!wapeOk) {
+    wapeText = "Your data has enough months to attempt a backtest, but the held-out months summed to zero, so no reliable error estimate could be computed.";
+  } else if (revBacktest.hasUnconfirmedHoldoutMonth) {
+    wapeText = `Accuracy estimate limited: the test period fell on months without 2 full prior cycles, so this ` +
+      `understates real accuracy (~${fmtPct0(revBacktest.wape)} WAPE). Forward forecast still applies confirmed ` +
+      `seasonality where 2+ cycles exist.`;
+  } else {
+    wapeText = `On your last ${CONFIG.forecastHoldoutMonths} months, this forecast was off by ~${fmtPct0(revBacktest.wape)} on average (WAPE).`;
+  }
   const wapeP = document.createElement("p");
   wapeP.style.cssText = "font-size:13px;font-weight:600;margin:8px 0 0;";
   wapeP.textContent = wapeText;
   container.appendChild(wapeP);
+
+  // Separately -- and this is the number a CEO should actually trust --
+  // report whether the FORWARD forecast months (which use ALL available
+  // data, not a truncated training window) themselves have 2 confirmed
+  // prior cycles. This is usually a stronger position than the backtest
+  // above, precisely because the backtest's training window is short by
+  // construction (it has to leave the last few months out).
+  const nConfirmedForward = revForward.filter(f => f.seasonalConfirmed).length;
+  const forwardMonthNames = revForward.map(f => monthName(f.month));
+  let confirmText;
+  if (nConfirmedForward === revForward.length) {
+    confirmText = `Your next ${revForward.length} months (${forwardMonthNames.join(", ")}) each have 2+ confirmed prior years, ` +
+      `so the forward forecast is on firmer ground than the backtest score above.`;
+  } else if (nConfirmedForward === 0) {
+    confirmText = `None of your next ${revForward.length} forecast months have 2+ confirmed prior years yet, so all ` +
+      `${revForward.length} are forecast on trend alone (same footing as the backtest above).`;
+  } else {
+    const confirmedNames = revForward.filter(f => f.seasonalConfirmed).map(f => monthName(f.month));
+    const unconfirmedNames = revForward.filter(f => !f.seasonalConfirmed).map(f => monthName(f.month));
+    confirmText = `${nConfirmedForward} of your next ${revForward.length} forecast months (${confirmedNames.join(", ")}) have 2+ ` +
+      `confirmed prior years; ${unconfirmedNames.join(", ")} ${unconfirmedNames.length > 1 ? "do" : "does"} not yet, so ` +
+      `${unconfirmedNames.length > 1 ? "those are" : "that one is"} forecast on trend alone.`;
+  }
+  const confirmP = document.createElement("p");
+  confirmP.style.cssText = "font-size:13px;margin:4px 0 0;color:var(--ink-secondary);";
+  confirmP.textContent = confirmText;
+  container.appendChild(confirmP);
 
   // Next-3-months table, with an honest per-month seasonality note.
   const rows = revForward.map((f, i) => {
@@ -1664,7 +1715,9 @@ function renderForecast(container, ctx) {
   } else {
     seasonalPhrase = "no seasonal pattern that could be confirmed yet (needs at least 2 years of history for the same calendar month)";
   }
-  const wapePhrase = wapeOk ? `~${fmtPct0(revBacktest.wape)}` : "not available on this data";
+  const wapePhrase = !wapeOk ? "not available on this data"
+    : revBacktest.hasUnconfirmedHoldoutMonth ? `~${fmtPct0(revBacktest.wape)} (likely overstated -- see note above)`
+    : `~${fmtPct0(revBacktest.wape)}`;
   panelCaption(container, `Expected revenue next 3 months: ${fmtCr(totalForecastRevenue)} total. Based on your trend and ${seasonalPhrase}. Typical error: ${wapePhrase}.`);
 }
 

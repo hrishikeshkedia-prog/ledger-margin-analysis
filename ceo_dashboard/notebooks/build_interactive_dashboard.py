@@ -2,12 +2,14 @@
 Builds the Stage 8 interactive dashboard:
 ceo_dashboard/notebooks/interactive_dashboard.html
 
-Bakes the bundled synthetic fashion CSVs (data/synthetic/orders.csv,
-marketing_spend.csv, inventory_snapshots.csv) into
-interactive_dashboard_template.html as the page's default dataset, so it
-opens looking identical to the static Stage 7 export -- but every chart in
-it is computed live in the browser from that embedded CSV text, and a user
-can replace it with their own CSV entirely client-side.
+Bakes the DIY-kits order-level CSV (sample_data/diy_kits_transactions.csv)
+into interactive_dashboard_template.html as the page's default dataset, so
+it opens on that business's real order history -- no marketing-spend or
+inventory-snapshot file is bundled, since no real channel/ad-spend or
+inventory data exists for this business; those panels simply show their
+normal "upload a file to unlock" empty state until the CEO supplies one.
+Every chart is computed live in the browser from the embedded CSV text, and
+a user can replace it with their own CSV entirely client-side.
 
 This does NOT touch the Stage 1-7 Python pipeline (data_generator.py,
 core.py, fashion.py, dashboard.py, export_html.py, ceo_dashboard.ipynb,
@@ -18,22 +20,21 @@ import json
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_CEO_DASHBOARD_ROOT = os.path.dirname(_HERE)
 
 TEMPLATE_PATH = os.path.join(_HERE, "interactive_dashboard_template.html")
 OUTPUT_PATH = os.path.join(_HERE, "interactive_dashboard.html")
-DATA_DIR = os.path.join(_CEO_DASHBOARD_ROOT, "data", "synthetic")
+DIY_ORDERS_PATH = os.path.join(_HERE, "sample_data", "diy_kits_transactions.csv")
 
 
 def main():
-    with open(os.path.join(DATA_DIR, "orders.csv"), encoding="utf-8") as f:
+    with open(DIY_ORDERS_PATH, encoding="utf-8") as f:
         orders_csv = f.read()
-    with open(os.path.join(DATA_DIR, "marketing_spend.csv"), encoding="utf-8") as f:
-        marketing_csv = f.read()
-    with open(os.path.join(DATA_DIR, "inventory_snapshots.csv"), encoding="utf-8") as f:
-        inventory_csv = f.read()
 
-    default_data = {"orders": orders_csv, "marketing": marketing_csv, "inventory": inventory_csv}
+    # No real marketing-spend or inventory-snapshot data exists for this
+    # business -- leave both empty so the page's normal graceful-degradation
+    # path handles it (those panels show "upload a file to unlock" instead
+    # of a stale, mismatched aux table).
+    default_data = {"orders": orders_csv, "marketing": "", "inventory": ""}
 
     with open(TEMPLATE_PATH, encoding="utf-8") as f:
         template = f.read()

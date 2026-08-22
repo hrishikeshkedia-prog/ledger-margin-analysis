@@ -216,9 +216,12 @@ load their own transactions CSV so the same dashboard works for any
 goods-selling business, not only D2C fashion. No server, no external
 scripts -- opens offline, double-clicked from disk.
 
-- **Loads with the bundled synthetic fashion dataset by default**, looking
-  the same as the static export, but every number recomputes if you edit
-  the data.
+- **Loads with a real DIY-kits business's own order data by default**
+  (`sample_data/diy_kits_transactions.csv`, baked in at build time), so it
+  opens on that business's actual numbers rather than a synthetic sample --
+  no marketing-spend or inventory data is bundled alongside it, since none
+  exists for this business; those panels simply show their normal "upload a
+  file to unlock" state until one is supplied.
 - **Column mapping, surfaced to the user**: upload a transactions CSV
   (date, product, quantity, revenue, cost, plus optional returns /
   customer ID / marketing channel) and the page auto-guesses which of your
@@ -232,9 +235,20 @@ scripts -- opens offline, double-clicked from disk.
   cleanly with a note naming exactly what column would unlock them. The
   KPI scorecard and executive summary shrink to their universal-core tiles
   (revenue, gross margin, top-10 concentration) the same way. Try
-  `notebooks/sample_data/diy_kits_transactions.csv` (a non-fashion,
-  synthetic DIY-craft-kit dataset with no returns/marketing/customer-ID
-  columns) via the Transactions file picker to see this live.
+  `notebooks/sample_data/thin_monthly_revenue.csv` (only month + revenue --
+  core panels only) via the Transactions file picker to see this live.
+- **Goal Planner**: a goal-seek panel built entirely from real, measured
+  per-category revenue/cost/margin (`Engine.categoryStats`). The CEO picks a
+  Revenue or Profit target for next quarter and caps two levers -- a
+  price increase per category (labeled "assumes demand holds," since real
+  elasticity isn't modeled) and a product-mix shift toward the
+  better-suited category for that goal (labeled "assumes shifted units sell
+  through at the destination's average price/margin"). It reuses the
+  Demand Forecast's seasonal projection for the next-quarter baseline where
+  there's enough history, and returns several ranked paths within the
+  CEO's caps -- or, if no combination reaches the target, says so plainly
+  with the closest reachable % and which cap is binding, rather than
+  stretching either assumption to force a "yes".
 - **Editable data view**: a paginated, in-browser-editable table of the
   loaded transactions -- tweak any cell and click "Recompute" to see every
   chart redraw from the edited data, entirely client-side.
@@ -253,8 +267,8 @@ python notebooks/build_interactive_dashboard.py
 ```
 
 (No `BROWSER_PATH`/kaleido needed here -- there's nothing to rasterize at
-build time; the build step only bakes the bundled CSVs into the page as
-its default dataset.)
+build time; the build step only bakes the bundled DIY-kits CSV into the
+page as its default dataset.)
 
 ## Swappable data loading
 

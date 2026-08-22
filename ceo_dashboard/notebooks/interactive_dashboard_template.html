@@ -152,12 +152,14 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
           <p style="font-size:11px;color:var(--ink-muted);margin:6px 0 0;">Want to see graceful degradation? Try
             <code>sample_data/thin_monthly_revenue.csv</code> (only month + revenue -- core panels only) or
             <code>sample_data/dashboard_ready_transactions.csv</code> (adds cost + a Cost Breakdown / Macro Prices file --
-            unlocks External Cost Sensitivity's full library, both bundled alongside this page).</p>
+            unlocks External Cost Sensitivity's full library, both bundled alongside this page). To see Ad-Spend
+            Headroom, pair <code>sample_data/ad_headroom_transactions.csv</code> here with
+            <code>sample_data/ad_headroom_marketing.csv</code> below (an Amazon + Organic/Email channel example).</p>
         </div>
         <div class="upload-card">
           <h4>Marketing Spend (optional)</h4>
-          <p>Month, channel, spend. Unlocks the Channel Economics panel when paired with a mapped
-            "Marketing Channel" column above.</p>
+          <p>Month, channel, spend. Unlocks the Channel Economics and Ad-Spend Headroom panels when paired with a
+            mapped "Marketing Channel" column above.</p>
           <input type="file" id="file-marketing" accept=".csv">
           <div class="filename" id="filename-marketing">No file loaded for this business -- upload one to unlock Channel Economics.</div>
         </div>
@@ -281,6 +283,11 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
     <div class="chart-block" id="panel-goal-planner"></div>
   </section>
 
+  <section id="sec-ad-headroom">
+    <h2>Ad-Spend Headroom</h2>
+    <div class="chart-block" id="panel-ad-headroom"></div>
+  </section>
+
   <section id="sec-sensitivity">
     <h2>External Cost Sensitivity</h2>
     <div class="chart-block" id="panel-sensitivity"></div>
@@ -361,6 +368,20 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         seasonal forecast it isn't. If no combination of the two levers within their caps reaches the
         target, the panel says so plainly -- the closest reachable % and which cap is binding -- rather
         than stretching either assumption to force a "yes".</li>
+      <li><strong>Ad-Spend Headroom is a separate, whole-business reverse goal-seek -- never blended, never a
+        flat conversion.</strong> Its baseline (last 3 loaded months' total company revenue and total ad
+        spend across every channel) and its channel ROAS (that one channel's own revenue attributed to it,
+        divided by its own spend) are both measured straight from your Marketing Spend file and mapped
+        Marketing Channel column -- it defaults to whichever channel's name contains "Amazon," falling back
+        to your highest-spend channel with a picker to override either way, specifically so a single paid
+        channel's real numbers drive the model instead of a blended company-wide ratio that would credit
+        organic/offline revenue to ad spend that had nothing to do with it. Extra spend is modeled in
+        1-percentage-point increments with marginal ROAS decaying geometrically from that measured base by
+        an editable decline rate -- never a flat ROAS applied to the whole cap -- and stops early, with an
+        explicit "beyond this much spend, extra rupees stop paying for themselves" message, if marginal ROAS
+        would fall to 1x or below before the cap is used up. Its "Net effect" tile only subtracts the extra
+        ad spend, not cost of goods; a second, separately labeled figure adds that in using your measured
+        overall gross margin % when cost data is available.</li>
     </ul>
   </footer>
 
@@ -914,6 +935,29 @@ Engine.channelSpendTotals = mkt => {
   const totals = new Map();
   byChannel.forEach((rows, ch) => totals.set(ch, sum(rows, m => m.spend)));
   return totals;
+};
+
+// Per-channel, per-month spend and revenue -- an outer join on (month,
+// channel) between the Marketing Spend rows and the Transactions rows
+// attributed to that channel. This is the MEASURED, un-blended building
+// block the Ad-Spend Headroom panel needs: a single channel's own revenue
+// divided by its own spend, never total-company revenue divided by
+// total-company spend (which would over-credit organic/offline sales to
+// paid channels that had nothing to do with them).
+Engine.channelMonthly = (txns, mkt) => {
+  const spendMap = new Map();
+  mkt.forEach(m => { const k = m.month + "|" + m.channel; spendMap.set(k, (spendMap.get(k) || 0) + m.spend); });
+  const revMap = new Map();
+  txns.forEach(t => {
+    if (!t.channel) return;
+    const k = t.month + "|" + t.channel;
+    revMap.set(k, (revMap.get(k) || 0) + Engine.netRevenue(t));
+  });
+  const keys = new Set([...spendMap.keys(), ...revMap.keys()]);
+  return Array.from(keys).map(k => {
+    const sep = k.indexOf("|");
+    return { month: k.slice(0, sep), channel: k.slice(sep + 1), spend: spendMap.get(k) || 0, revenue: revMap.get(k) || 0 };
+  });
 };
 Engine.channelMarginAfterSpend = (txns, mkt) => {
   const spend = Engine.channelSpendTotals(mkt);
@@ -2230,6 +2274,263 @@ function renderGoalPlanner(container, ctx) {
   recompute();
 }
 
+// Ad-Spend Headroom -- a REVERSE goal-seek, whole-business (not per-SKU),
+// entirely separate from the Goal Planner above. The CEO sets a max %
+// increase in total ad spend; this answers the highest revenue growth %
+// reachable within that cap.
+//
+// The baseline is the last 3 calendar months actually present in the data
+// (a measured "current run-rate," not a forecast): total company revenue
+// and total ad spend (summed across every channel in the Marketing Spend
+// file) over that window.
+//
+// The conversion from extra rupees of spend to extra rupees of revenue
+// uses ONE channel's own MEASURED ROAS (that channel's own attributed
+// revenue / that channel's own spend) -- defaulting to whichever loaded
+// channel's name contains "Amazon" (falling back to the highest-spend
+// channel if none does, with a channel picker to override either way).
+// This is deliberate: a BLENDED ratio (total company revenue / total ad
+// spend) would credit organic/offline sales that had nothing to do with
+// the ad spend to that spend, overstating headroom. A single paid
+// channel's own before/after numbers don't have that problem.
+//
+// Diminishing returns: extra spend is modeled in 1-percentage-point-of-
+// baseline-spend increments; each increment's MARGINAL ROAS decays
+// geometrically from the measured base by an EDITABLE decline rate per
+// increment (never a flat conversion). If marginal ROAS decays to <=1x
+// before the cap is exhausted, the model stops spending right there --
+// "beyond this much spend, extra rupees stop paying for themselves" --
+// rather than pretending the cap is always worth fully using.
+function computeAdSpendHeadroom(p) {
+  // p: totalAdSpendBaseline, totalRevenueBaseline, channelRoasBase, maxSpendPct, declineRatePct
+  const stepRupees = p.totalAdSpendBaseline / 100; // rupees per 1 percentage point of baseline spend
+  const maxSpendPct = Math.max(0, p.maxSpendPct);
+  const fullSteps = Math.floor(maxSpendPct);
+  const remainderPct = maxSpendPct - fullSteps;
+  const curve = [];
+  let cumulativeSpend = 0, cumulativeRevenue = 0, stoppedEarly = false, stopAtPct = null;
+
+  function applyStep(pct, decaySteps) {
+    const marginalRoas = p.channelRoasBase * Math.pow(1 - p.declineRatePct / 100, decaySteps);
+    if (marginalRoas <= 1) return false; // signal: stop, this increment no longer pays for itself
+    const spendThisStep = stepRupees * pct;
+    const revenueThisStep = spendThisStep * marginalRoas;
+    cumulativeSpend += spendThisStep;
+    cumulativeRevenue += revenueThisStep;
+    const atPct = (curve.length ? curve[curve.length - 1].atPct : 0) + pct;
+    curve.push({ atPct, marginalRoas, cumulativeSpend, cumulativeRevenue });
+    return true;
+  }
+
+  for (let i = 0; i < fullSteps; i++) {
+    if (!applyStep(1, i)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); break; }
+  }
+  if (!stoppedEarly && remainderPct > 1e-9) {
+    if (!applyStep(remainderPct, fullSteps)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); }
+  }
+
+  const spendUsed = cumulativeSpend;
+  const revenueGained = cumulativeRevenue;
+  const growthPct = p.totalRevenueBaseline ? (revenueGained / p.totalRevenueBaseline) * 100 : 0;
+  const netEffect = revenueGained - spendUsed;
+  const spendUsedPct = p.totalAdSpendBaseline ? (spendUsed / p.totalAdSpendBaseline) * 100 : 0;
+
+  return {
+    extraSpendCap: stepRupees * maxSpendPct, curve, stoppedEarly, stopAtPct,
+    spendUsed, spendUsedPct, revenueGained, growthPct, netEffect,
+  };
+}
+
+function renderAdSpendHeadroom(container, ctx) {
+  const { cov } = ctx;
+  panelHeader(container, "Ad-Spend Headroom (Whole-Business)");
+
+  if (!cov.marketing) {
+    const p = document.createElement("p");
+    p.className = "chart-caption"; p.style.margin = "4px 0";
+    p.textContent = "Add a Marketing Spend file (Month, Channel, Spend) and map a Marketing Channel column in " +
+      "Transactions to unlock Ad-Spend Headroom -- it needs a real channel's own measured ROAS to work from.";
+    container.appendChild(p);
+    return;
+  }
+
+  const channelMonthly = Engine.channelMonthly(ctx.txns, ctx.mkt);
+  const allMonths = ctx.revenueTrend.map(r => r.month);
+  const lastQuarterMonths = allMonths.slice(-3);
+  const totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(r.month)), r => r.netRevenue);
+  const totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(m.month)), m => m.spend);
+
+  const channels = Array.from(new Set(ctx.mkt.map(m => m.channel)));
+  const channelTotalSpendAll = Engine.channelSpendTotals(ctx.mkt);
+  const amazonChannel = channels.find(c => normHeader(c).includes(normHeader("amazon")));
+  const defaultChannel = amazonChannel || channels.slice().sort((a, b) => (channelTotalSpendAll.get(b) || 0) - (channelTotalSpendAll.get(a) || 0))[0];
+
+  function roasForChannel(channel) {
+    const inQuarter = channelMonthly.filter(r => r.channel === channel && lastQuarterMonths.includes(r.month));
+    let spend = sum(inQuarter, r => r.spend), revenue = sum(inQuarter, r => r.revenue), windowLabel = "last quarter";
+    if (!(spend > 0)) {
+      const fullWindow = channelMonthly.filter(r => r.channel === channel);
+      spend = sum(fullWindow, r => r.spend); revenue = sum(fullWindow, r => r.revenue);
+      windowLabel = "your full loaded window (not enough recent months with spend on this channel)";
+    }
+    return { spend, revenue, roas: spend > 0 ? revenue / spend : NaN, windowLabel };
+  }
+
+  const wrap = document.createElement("div");
+  wrap.style.marginTop = "6px";
+  container.appendChild(wrap);
+
+  if (!defaultChannel) {
+    const p = document.createElement("p");
+    p.className = "chart-caption";
+    p.textContent = "Your Marketing Spend file has no channel with any spend -- nothing to compute headroom from.";
+    wrap.appendChild(p);
+    return;
+  }
+
+  const inputs = { channel: defaultChannel, maxSpendPct: 20, declineRatePct: 3 };
+
+  const inputsCard = document.createElement("div");
+  inputsCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--page);";
+  wrap.appendChild(inputsCard);
+
+  const inputsHeading = document.createElement("div");
+  inputsHeading.style.cssText = "font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--ink-muted);margin-bottom:8px;";
+  inputsHeading.textContent = "Inputs -- what you're willing to spend";
+  inputsCard.appendChild(inputsHeading);
+
+  const fieldsRow = document.createElement("div");
+  fieldsRow.style.cssText = "display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;";
+  inputsCard.appendChild(fieldsRow);
+
+  const channelCol = fieldCol("Ad channel this models" + (amazonChannel ? " (defaulted to Amazon)" : " (defaulted to your highest-spend channel)"));
+  const channelSelect = document.createElement("select");
+  channelSelect.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  channels.forEach(c => { const opt = document.createElement("option"); opt.value = c; opt.textContent = c; if (c === inputs.channel) opt.selected = true; channelSelect.appendChild(opt); });
+  channelSelect.addEventListener("change", () => { inputs.channel = channelSelect.value; recompute(); });
+  channelCol.appendChild(channelSelect);
+  fieldsRow.appendChild(channelCol);
+
+  const spendCapCol = fieldCol("Max ad-spend increase, %");
+  const spendCapInput = document.createElement("input");
+  spendCapInput.type = "number"; spendCapInput.min = "0"; spendCapInput.step = "1"; spendCapInput.value = String(inputs.maxSpendPct);
+  spendCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  spendCapInput.addEventListener("input", () => { inputs.maxSpendPct = Math.max(0, Number(spendCapInput.value) || 0); recompute(); });
+  spendCapCol.appendChild(spendCapInput);
+  fieldsRow.appendChild(spendCapCol);
+
+  const declineCol = fieldCol("Diminishing-returns decline, %/pt");
+  const declineInput = document.createElement("input");
+  declineInput.type = "number"; declineInput.min = "0"; declineInput.max = "100"; declineInput.step = "0.5"; declineInput.value = String(inputs.declineRatePct);
+  declineInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  declineInput.addEventListener("input", () => { inputs.declineRatePct = Math.max(0, Number(declineInput.value) || 0); recompute(); });
+  declineCol.appendChild(declineInput);
+  declineCol.appendChild(provenanceNote("Assumption (editable): marginal ROAS falls by this % for every extra 1 percentage point of spend.", true));
+  fieldsRow.appendChild(declineCol);
+
+  const outputDiv = document.createElement("div");
+  outputDiv.style.marginTop = "16px";
+  wrap.appendChild(outputDiv);
+
+  function recompute() {
+    const channelStats = roasForChannel(inputs.channel);
+    outputDiv.innerHTML = "";
+
+    const roasNote = document.createElement("p");
+    roasNote.style.cssText = "font-size:12px;margin:0 0 12px;color:var(--good);";
+    roasNote.textContent = isFinite(channelStats.roas)
+      ? `Measured ${inputs.channel} ROAS, ${channelStats.windowLabel}: ${channelStats.roas.toFixed(2)}x ` +
+        `(${fmtMoney0(channelStats.revenue)} revenue / ${fmtMoney0(channelStats.spend)} spend).`
+      : `${inputs.channel} has no measured spend in your data -- nothing to model headroom from.`;
+    roasNote.style.color = isFinite(channelStats.roas) ? "var(--good)" : "#8a5a00";
+    outputDiv.appendChild(roasNote);
+
+    if (!isFinite(channelStats.roas) || !(totalAdSpendBaseline > 0)) {
+      const p2 = document.createElement("p");
+      p2.className = "chart-caption";
+      p2.textContent = !(totalAdSpendBaseline > 0)
+        ? "No ad spend recorded in your last 3 loaded months -- nothing to compute headroom from."
+        : "Pick a channel with measured spend to see headroom.";
+      outputDiv.appendChild(p2);
+      return;
+    }
+
+    const result = computeAdSpendHeadroom({
+      totalAdSpendBaseline, totalRevenueBaseline, channelRoasBase: channelStats.roas,
+      maxSpendPct: inputs.maxSpendPct, declineRatePct: inputs.declineRatePct,
+    });
+
+    const headline = document.createElement("p");
+    headline.style.cssText = "font-size:14px;font-weight:600;margin:0 0 12px;";
+    headline.textContent = `At +${inputs.maxSpendPct.toFixed(1)}% ad spend, the highest revenue growth you can reach is about ` +
+      `+${result.growthPct.toFixed(1)}%.`;
+    outputDiv.appendChild(headline);
+
+    const tilesRow = document.createElement("div");
+    tilesRow.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;";
+    tilesRow.appendChild(tile("Added ad spend", fmtMoney0(result.spendUsed)));
+    tilesRow.appendChild(tile("Added revenue", fmtMoney0(result.revenueGained)));
+    tilesRow.appendChild(tile("Net effect (revenue − ad spend)", fmtMoney0(result.netEffect), result.netEffect < 0));
+    outputDiv.appendChild(tilesRow);
+
+    if (cov.cost && isFinite(ctx.marginPct)) {
+      const marginNote = document.createElement("p");
+      marginNote.style.cssText = "font-size:11.5px;color:var(--ink-secondary);margin:-6px 0 14px;";
+      const netOfCogs = result.revenueGained * ctx.marginPct - result.spendUsed;
+      marginNote.textContent = `Not full profit -- "Net effect" above only subtracts the extra ad spend, not cost of goods. Counting ` +
+        `cost of goods too (added revenue × your measured overall gross margin of ${fmtPct1(ctx.marginPct)}, minus added ad spend): ` +
+        `${fmtMoney0(netOfCogs)}.`;
+      outputDiv.appendChild(marginNote);
+    }
+
+    if (result.stoppedEarly) {
+      const stopBox = document.createElement("div");
+      stopBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:12px 14px;background:#fff6ea;font-size:13px;margin-bottom:14px;";
+      stopBox.innerHTML = `<strong>Honest ceiling reached.</strong> Beyond +${result.stopAtPct.toFixed(1)}% spend, extra rupees stop ` +
+        `paying for themselves at this decline rate (marginal ROAS would drop to 1x or below) -- so this model only spends up to there, ` +
+        `not your full +${inputs.maxSpendPct.toFixed(1)}% cap.`;
+      outputDiv.appendChild(stopBox);
+    }
+
+    // The marginal-ROAS curve -- the whole point of this panel: show
+    // returns diminishing, don't just assert it.
+    if (result.curve.length) {
+      const curveHeading = document.createElement("div");
+      curveHeading.style.cssText = "font-size:12px;font-weight:600;margin:4px 0 6px;";
+      curveHeading.textContent = "Marginal ROAS as spend rises";
+      outputDiv.appendChild(curveHeading);
+
+      // Thin the curve for the x-axis when there are many 1pp steps, so
+      // labels stay legible -- the underlying math above is still computed
+      // at full 1pp resolution regardless of how many points are plotted.
+      const maxLabels = 24;
+      const stride = Math.max(1, Math.ceil(result.curve.length / maxLabels));
+      const plotted = result.curve.filter((c, i) => i % stride === 0 || i === result.curve.length - 1);
+      const cats = plotted.map(c => "+" + c.atPct.toFixed(c.atPct % 1 === 0 ? 0 : 1) + "%");
+      const vals = plotted.map(c => c.marginalRoas);
+      const svg = makeSvg(200);
+      outputDiv.appendChild(svg);
+      const frame = drawVFrame(svg, { yMin: Math.min(1, ...vals) * 0.9, yMax: Math.max(...vals, 1) * 1.1, yFormat: v => v.toFixed(1) + "x", xCategories: cats, xRotate: true });
+      drawLine(svg, frame, cats, vals, COLORS.categorical[0]);
+      // A y=1 reference line: below it, extra spend no longer pays for itself.
+      const yAt1 = frame.yScale(1);
+      svg.appendChild(se("line", { x1: frame.x0, x2: frame.x1, y1: yAt1, y2: yAt1, stroke: COLORS.status.critical, "stroke-width": 1, "stroke-dasharray": "4 3" }));
+      svg.appendChild(text(frame.x1 - 4, yAt1 - 4, "1x -- breakeven", "tick-label", { "text-anchor": "end", fill: COLORS.status.critical }));
+    }
+
+    const note = document.createElement("p");
+    note.className = "chart-caption";
+    note.style.marginTop = "10px";
+    note.textContent = `Baseline (last quarter, measured): ${fmtMoney0(totalRevenueBaseline)} total company revenue, ` +
+      `${fmtMoney0(totalAdSpendBaseline)} total ad spend across all channels. The ROAS used to convert spend into revenue is ` +
+      `${inputs.channel}'s own measured figure, not a blended company-wide ratio -- blending would credit organic/offline sales to ` +
+      `ad spend that had nothing to do with them. The decline rate is your editable assumption, never derived by fitting a curve to history.`;
+    outputDiv.appendChild(note);
+  }
+
+  recompute();
+}
+
 // External Cost Sensitivity -- a WHAT-IF calculator, never a prediction. It
 // never forecasts an external price (USD, crude, or anything else) and
 // never claims an external factor caused any historical cost change; it
@@ -2697,7 +2998,7 @@ function renderAll(state) {
     // exactly what to map. Just clear every panel and stop.
     perfSection.style.display = "none";
     document.getElementById("exec-summary").innerHTML = "";
-    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast", "sec-goal-planner", "sec-sensitivity"].forEach(id => {
+    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast", "sec-goal-planner", "sec-ad-headroom", "sec-sensitivity"].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = "none";
     });
     renderEditableTable(state);
@@ -2746,6 +3047,14 @@ function renderAll(state) {
   // isn't mapped (it needs real per-category margin to work from).
   document.getElementById("sec-goal-planner").style.display = "";
   renderGoalPlanner(document.getElementById("panel-goal-planner"), ctx);
+
+  // Ad-Spend Headroom is always attempted once cov.core holds too --
+  // renderAdSpendHeadroom() itself shows the disabled state inline when no
+  // Marketing Spend file + channel mapping is loaded (same gate as Channel
+  // Economics: cov.marketing). It is a separate, whole-business panel from
+  // the per-category Goal Planner above.
+  document.getElementById("sec-ad-headroom").style.display = "";
+  renderAdSpendHeadroom(document.getElementById("panel-ad-headroom"), ctx);
 
   // Sensitivity is always attempted once cov.core holds too -- renderSensitivity()
   // itself shows the Tier 1 disabled state inline when Cost isn't mapped.

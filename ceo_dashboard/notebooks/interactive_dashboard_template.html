@@ -153,13 +153,14 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
             <code>sample_data/thin_monthly_revenue.csv</code> (only month + revenue -- core panels only) or
             <code>sample_data/dashboard_ready_transactions.csv</code> (adds cost + a Cost Breakdown / Macro Prices file --
             unlocks External Cost Sensitivity's full library, both bundled alongside this page). To see Ad-Spend
-            Impact, pair <code>sample_data/ad_spend_impact_transactions.csv</code> here with
-            <code>sample_data/ad_spend_impact_marketing.csv</code> below (an Amazon + Organic/Email channel example).</p>
+            Impact, load any Transactions file (channel column not required) and upload
+            <code>sample_data/ad_spend_impact_marketing.csv</code> below on its own.</p>
         </div>
         <div class="upload-card">
           <h4>Marketing Spend (optional)</h4>
-          <p>Month, channel, spend. Unlocks the Channel Economics and Ad-Spend Impact panels when paired with a
-            mapped "Marketing Channel" column above.</p>
+          <p>Month, channel, spend. On its own, this unlocks Ad-Spend Impact (a whole-business, blended-ROAS
+            what-if -- no channel mapping needed in Transactions). Paired with a mapped "Marketing Channel"
+            column above, it also unlocks Channel Economics (per-channel, un-blended).</p>
           <input type="file" id="file-marketing" accept=".csv">
           <div class="filename" id="filename-marketing">No file loaded for this business -- upload one to unlock Channel Economics.</div>
         </div>
@@ -377,24 +378,29 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         seasonal forecast it isn't. If no combination of the two levers within their caps reaches the
         target, the panel says so plainly -- the closest reachable % and which cap is binding -- rather
         than stretching either assumption to force a "yes".</li>
-      <li><strong>Ad-Spend Impact is a separate, whole-business what-if -- never blended, never a flat
-        conversion, and never per-SKU.</strong> Its baseline (last 3 loaded months' total company revenue
-        and total ad spend across every channel) and its channel ROAS (that one channel's own revenue
-        attributed to it, divided by its own spend) are both measured straight from your Marketing Spend
-        file and mapped Marketing Channel column -- it defaults to whichever channel's name contains
-        "Amazon," falling back to your highest-spend channel with a picker to override either way,
-        specifically so a single paid channel's real numbers drive the model instead of a blended
-        company-wide ratio that would credit organic/offline revenue to ad spend that had nothing to do
-        with it. Extra spend is modeled in 1-percentage-point increments with marginal ROAS decaying
-        geometrically from that measured base by an editable decline rate (default 0.5%/point, deliberately
-        gentle -- informed by, but not fit to, a real observation of a large spend jump seeing marginal ROAS
-        fall from ~2.5x toward ~1.85x) -- never a flat ROAS applied to the whole request -- and stops early,
-        with an explicit "beyond this much spend, extra spend loses money" message, if marginal ROAS would
-        fall to 1x or below before the requested increase is fully spent. Profit Impact is reported
-        separately from Revenue Impact (extra revenue × measured overall gross margin, minus the extra ad
-        spend, gated on Cost being mapped) -- because margin is under 100%, profit can and does turn
-        negative at a lower spend level than revenue does, and this panel reports that plainly rather than
-        only showing the more flattering top-line number.</li>
+      <li><strong>Ad-Spend Impact is a separate, whole-business what-if, gated ONLY on a Marketing Spend
+        file -- never per-SKU, never a flat conversion.</strong> Unlike Channel Economics on this same page,
+        it deliberately does NOT require a Marketing Channel column in Transactions: it needs only the
+        Marketing Spend file (Month, Channel, Spend) to compute a whole-business, BLENDED ROAS -- total
+        company revenue ÷ total ad spend across every row of that file, over the last 3 loaded months
+        (falling back to the full window if that's thin). Being blended is a real limitation, stated
+        plainly here: this ratio doesn't separate out revenue that would have happened anyway (organic,
+        repeat, offline), so it can overstate what the ad spend itself is driving -- the panel labels this
+        explicitly rather than pretending it isolated paid-channel performance the way a true per-channel
+        ROAS would. The CEO's input is signed (+ to model an increase, − a cut). Extra spend is modeled in
+        1-percentage-point increments with marginal ROAS decaying geometrically from that measured base by
+        an editable decline rate (default 0.5%/point, deliberately gentle -- informed by, but not fit to, a
+        real observation of a large spend jump seeing marginal ROAS fall from ~2.5x toward ~1.85x) -- never
+        a flat ROAS applied to the whole request. An INCREASE stops early, with an explicit "beyond this
+        much spend, extra spend loses money" message, if marginal ROAS would fall to 1x or below before the
+        requested change is fully applied; a CUT has no such ceiling (existing spend isn't assumed
+        unprofitable just because more would be) and is instead modeled as the mirror image of the
+        equivalent increase, applied in full -- a stated simplification, not a separately-fitted "cut"
+        model. Profit Impact is reported separately from Revenue Impact (revenue change × measured overall
+        gross margin, minus the ad spend change -- sign-agnostic, so it works for cuts too -- gated on Cost
+        being mapped) -- because margin is under 100%, profit can and does turn negative at a lower spend
+        increase than revenue does, and this panel reports that plainly rather than only showing the more
+        flattering top-line number.</li>
     </ul>
   </footer>
 
@@ -950,28 +956,6 @@ Engine.channelSpendTotals = mkt => {
   return totals;
 };
 
-// Per-channel, per-month spend and revenue -- an outer join on (month,
-// channel) between the Marketing Spend rows and the Transactions rows
-// attributed to that channel. This is the MEASURED, un-blended building
-// block the Ad-Spend Impact panel needs: a single channel's own revenue
-// divided by its own spend, never total-company revenue divided by
-// total-company spend (which would over-credit organic/offline sales to
-// paid channels that had nothing to do with them).
-Engine.channelMonthly = (txns, mkt) => {
-  const spendMap = new Map();
-  mkt.forEach(m => { const k = m.month + "|" + m.channel; spendMap.set(k, (spendMap.get(k) || 0) + m.spend); });
-  const revMap = new Map();
-  txns.forEach(t => {
-    if (!t.channel) return;
-    const k = t.month + "|" + t.channel;
-    revMap.set(k, (revMap.get(k) || 0) + Engine.netRevenue(t));
-  });
-  const keys = new Set([...spendMap.keys(), ...revMap.keys()]);
-  return Array.from(keys).map(k => {
-    const sep = k.indexOf("|");
-    return { month: k.slice(0, sep), channel: k.slice(sep + 1), spend: spendMap.get(k) || 0, revenue: revMap.get(k) || 0 };
-  });
-};
 Engine.channelMarginAfterSpend = (txns, mkt) => {
   const spend = Engine.channelSpendTotals(mkt);
   const byChannel = groupBy(txns.filter(t => t.channel), t => t.channel);
@@ -2497,51 +2481,58 @@ function renderGoalPlanner(container, ctx) {
 
 // Ad-Spend Impact -- a WHAT-IF (never a search/goal-seek), whole-business
 // (not per-SKU), entirely separate from the Goal Planner above. The CEO
-// types "increase total ad spend by X%"; this reports the revenue AND
-// profit impact of that exact scenario.
+// types "change total ad spend by X%" (positive or negative); this reports
+// the revenue AND profit impact of that exact scenario.
 //
-// The baseline is the last 3 calendar months actually present in the data
-// (a measured "current run-rate," not a forecast): total company revenue
-// and total ad spend (summed across every channel in the Marketing Spend
-// file) over that window.
-//
-// The conversion from extra rupees of spend to extra rupees of revenue
-// uses ONE channel's own MEASURED ROAS (that channel's own attributed
-// revenue / that channel's own spend) -- defaulting to whichever loaded
-// channel's name contains "Amazon" (falling back to the highest-spend
-// channel if none does, with a channel picker to override either way).
-// This is deliberate: a BLENDED ratio (total company revenue / total ad
-// spend) would credit organic/offline sales that had nothing to do with
-// the ad spend to that spend, overstating the impact.
+// Gated ONLY on a Marketing Spend file being loaded (Month, Channel, Spend)
+// -- deliberately NOT on Transactions having a mapped Marketing Channel
+// column. ROAS here is a WHOLE-BUSINESS ratio: total company revenue
+// (from Transactions, every row, channel or no channel) divided by total
+// ad spend across every row of the Marketing Spend file, both over the
+// last 3 calendar months actually present in the data (a measured
+// "current run-rate," not a forecast). This is a deliberate simplification
+// from a per-channel ROAS: it needs nothing more than the one Marketing
+// Spend file to work, at the cost of blending in whatever organic/offline
+// revenue isn't attributable to that spend -- labeled as such below.
 //
 // Diminishing returns: extra spend is modeled in 1-percentage-point-of-
 // baseline-spend increments; each increment's MARGINAL ROAS decays
 // geometrically from the measured base by an EDITABLE decline rate per
-// increment (never a flat conversion). If marginal ROAS decays to <=1x
-// before the requested increase is fully applied, the model stops
-// spending right there -- "beyond +Z% spend, extra spend loses money" --
-// rather than pretending every rupee up to X% is worth spending.
+// increment (never a flat conversion). For an INCREASE, if marginal ROAS
+// decays to <=1x before the requested change is fully applied, the model
+// stops spending right there -- "beyond +Z% spend, extra spend loses
+// money" -- rather than pretending every rupee up to X% is worth spending.
+// For a CUT (negative X%), there's no such ceiling to hit (existing spend
+// isn't assumed unprofitable just because MORE would be) -- a cut is
+// modeled as the mirror image of the equivalent increase, applied in full
+// across the requested magnitude, using the same measured ROAS and decay
+// curve. That symmetry is a simplification, stated plainly in the UI
+// rather than presented as a separately-fitted "cut" model.
 //
 // PROFIT is mandatory and separate from revenue: extra profit = extra
-// revenue x the MEASURED overall gross margin, MINUS the extra ad spend.
-// Because that margin is < 100%, profit turns negative at a lower spend
-// level than revenue does (revenue only stops growing once marginal ROAS
-// hits 1x; profit already stopped paying for itself once marginal ROAS
-// fell below 1/marginPct) -- this is reported as-is, not hidden, precisely
-// because "revenue still rising" and "profit already falling" can both be
-// true at the same time.
+// revenue x the MEASURED overall gross margin, MINUS the extra ad spend
+// (this formula is sign-agnostic, so it works unchanged for a cut too --
+// a negative "extra spend" is cash saved, which adds back into profit).
+// Because margin is < 100%, profit turns negative at a lower spend
+// increase than revenue does (revenue only stops growing once marginal
+// ROAS hits 1x; profit already stopped paying for itself once marginal
+// ROAS fell below 1/marginPct) -- this is reported as-is, not hidden,
+// precisely because "revenue still rising" and "profit already falling"
+// can both be true at the same time.
 function computeAdSpendImpact(p) {
-  // p: totalAdSpendBaseline, totalRevenueBaseline, channelRoasBase, spendIncreasePct, declineRatePct, marginPct (NaN if cost isn't mapped)
+  // p: totalAdSpendBaseline, totalRevenueBaseline, roasBase, spendChangePct (signed), declineRatePct, marginPct (NaN if cost isn't mapped)
   const stepRupees = p.totalAdSpendBaseline / 100; // rupees per 1 percentage point of baseline spend
-  const spendIncreasePct = Math.max(0, p.spendIncreasePct);
-  const fullSteps = Math.floor(spendIncreasePct);
-  const remainderPct = spendIncreasePct - fullSteps;
+  const sign = p.spendChangePct < 0 ? -1 : 1;
+  const magnitudePct = Math.abs(p.spendChangePct);
+  const fullSteps = Math.floor(magnitudePct);
+  const remainderPct = magnitudePct - fullSteps;
   const curve = [];
   let cumulativeSpend = 0, cumulativeRevenue = 0, stoppedEarly = false, stopAtPct = null;
 
-  function applyStep(pct, decaySteps) {
-    const marginalRoas = p.channelRoasBase * Math.pow(1 - p.declineRatePct / 100, decaySteps);
-    if (marginalRoas <= 1) return false; // signal: stop, this increment loses money on pure revenue terms already
+  // enforceCeiling only applies for an INCREASE (sign > 0) -- see comment above.
+  function applyStep(pct, decaySteps, enforceCeiling) {
+    const marginalRoas = p.roasBase * Math.pow(1 - p.declineRatePct / 100, decaySteps);
+    if (enforceCeiling && marginalRoas <= 1) return false; // this increment loses money on pure revenue terms already
     const spendThisStep = stepRupees * pct;
     const revenueThisStep = spendThisStep * marginalRoas;
     cumulativeSpend += spendThisStep;
@@ -2552,25 +2543,25 @@ function computeAdSpendImpact(p) {
   }
 
   for (let i = 0; i < fullSteps; i++) {
-    if (!applyStep(1, i)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); break; }
+    if (!applyStep(1, i, sign > 0)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); break; }
   }
   if (!stoppedEarly && remainderPct > 1e-9) {
-    if (!applyStep(remainderPct, fullSteps)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); }
+    if (!applyStep(remainderPct, fullSteps, sign > 0)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); }
   }
 
-  const spendUsed = cumulativeSpend;
-  const revenueGained = cumulativeRevenue;
+  const spendUsed = sign * cumulativeSpend;
+  const revenueGained = sign * cumulativeRevenue;
   const revenueGrowthPct = p.totalRevenueBaseline ? (revenueGained / p.totalRevenueBaseline) * 100 : 0;
 
   let profitGained = null, profitGrowthPct = null, profitBaseline = null;
   if (isFinite(p.marginPct)) {
-    profitGained = revenueGained * p.marginPct - spendUsed; // mandatory: subtract the extra spend
+    profitGained = revenueGained * p.marginPct - spendUsed; // mandatory: subtract the extra spend (sign-agnostic)
     profitBaseline = p.totalRevenueBaseline * p.marginPct;
     profitGrowthPct = profitBaseline ? (profitGained / profitBaseline) * 100 : 0;
   }
 
   return {
-    spendIncreasePct, curve, stoppedEarly, stopAtPct,
+    spendChangePct: p.spendChangePct, curve, stoppedEarly, stopAtPct,
     spendUsed, revenueGained, revenueGrowthPct,
     profitGained, profitGrowthPct, profitBaseline,
   };
@@ -2580,54 +2571,43 @@ function renderAdSpendImpact(container, ctx) {
   const { cov } = ctx;
   panelHeader(container, "Ad-Spend Impact (Whole-Business)");
 
-  if (!cov.marketing) {
+  // Gated ONLY on a Marketing Spend file being loaded -- no Transactions
+  // channel mapping required. ctx.mkt is populated once Month is present
+  // and both Channel + Spend are mapped IN THAT FILE (its own schema);
+  // Transactions' own "channel" role plays no part in this gate.
+  if (!ctx.mkt.length) {
     const p = document.createElement("p");
     p.className = "chart-caption"; p.style.margin = "4px 0";
-    p.textContent = "Add a Marketing Spend file (Month, Channel, Spend) and map a Marketing Channel column in " +
-      "Transactions to unlock Ad-Spend Impact -- it needs a real channel's own measured ROAS to work from.";
+    p.textContent = "Add a Marketing Spend file (Month, Channel, Spend) to unlock Ad-Spend Impact -- it needs a " +
+      "real measured ROAS to work from. No Marketing Channel column is required in Transactions.";
     container.appendChild(p);
     return;
   }
 
-  const channelMonthly = Engine.channelMonthly(ctx.txns, ctx.mkt);
   const allMonths = ctx.revenueTrend.map(r => r.month);
   const lastQuarterMonths = allMonths.slice(-3);
   const totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(r.month)), r => r.netRevenue);
   const totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(m.month)), m => m.spend);
-
-  const channels = Array.from(new Set(ctx.mkt.map(m => m.channel)));
-  const channelTotalSpendAll = Engine.channelSpendTotals(ctx.mkt);
-  const amazonChannel = channels.find(c => normHeader(c).includes(normHeader("amazon")));
-  const defaultChannel = amazonChannel || channels.slice().sort((a, b) => (channelTotalSpendAll.get(b) || 0) - (channelTotalSpendAll.get(a) || 0))[0];
-
-  function roasForChannel(channel) {
-    const inQuarter = channelMonthly.filter(r => r.channel === channel && lastQuarterMonths.includes(r.month));
-    let spend = sum(inQuarter, r => r.spend), revenue = sum(inQuarter, r => r.revenue), windowLabel = "last quarter";
-    if (!(spend > 0)) {
-      const fullWindow = channelMonthly.filter(r => r.channel === channel);
-      spend = sum(fullWindow, r => r.spend); revenue = sum(fullWindow, r => r.revenue);
-      windowLabel = "your full loaded window (not enough recent months with spend on this channel)";
-    }
-    return { spend, revenue, roas: spend > 0 ? revenue / spend : NaN, windowLabel };
+  // Whole-business ROAS: falls back to the full loaded window if the last
+  // 3 months happen to carry no recorded spend, same fallback pattern used
+  // elsewhere on this page rather than reporting nothing at all.
+  let roasBase, roasSpend = totalAdSpendBaseline, roasRevenue = totalRevenueBaseline, roasWindowLabel = "last quarter";
+  if (!(roasSpend > 0)) {
+    roasSpend = sum(ctx.mkt, m => m.spend);
+    roasRevenue = ctx.netRevenue;
+    roasWindowLabel = "your full loaded window (not enough recent months with spend)";
   }
+  roasBase = roasSpend > 0 ? roasRevenue / roasSpend : NaN;
 
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
   container.appendChild(wrap);
 
-  if (!defaultChannel) {
-    const p = document.createElement("p");
-    p.className = "chart-caption";
-    p.textContent = "Your Marketing Spend file has no channel with any spend -- nothing to compute impact from.";
-    wrap.appendChild(p);
-    return;
-  }
-
   // Default decline rate (0.5%/pt) is deliberately gentle -- informed by a
   // real observation (a 63% ad-spend jump saw marginal ROAS fall to ~1.85x
   // from a ~2.5x base, implying a slow per-point decay), NOT fit
   // automatically from any file this page loads. Still fully editable.
-  const inputs = { channel: defaultChannel, spendIncreasePct: 15, declineRatePct: 0.5 };
+  const inputs = { spendChangePct: 15, declineRatePct: 0.5 };
 
   const inputsCard = document.createElement("div");
   inputsCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--page);";
@@ -2635,26 +2615,18 @@ function renderAdSpendImpact(container, ctx) {
 
   const inputsHeading = document.createElement("div");
   inputsHeading.style.cssText = "font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--ink-muted);margin-bottom:8px;";
-  inputsHeading.textContent = "Inputs -- your ad-spend scenario";
+  inputsHeading.textContent = "Inputs -- your ad-spend scenario (whole-business, not per-product)";
   inputsCard.appendChild(inputsHeading);
 
   const fieldsRow = document.createElement("div");
-  fieldsRow.style.cssText = "display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;";
+  fieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:12px;";
   inputsCard.appendChild(fieldsRow);
 
-  const channelCol = fieldCol("Ad channel this models" + (amazonChannel ? " (defaulted to Amazon)" : " (defaulted to your highest-spend channel)"));
-  const channelSelect = document.createElement("select");
-  channelSelect.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  channels.forEach(c => { const opt = document.createElement("option"); opt.value = c; opt.textContent = c; if (c === inputs.channel) opt.selected = true; channelSelect.appendChild(opt); });
-  channelSelect.addEventListener("change", () => { inputs.channel = channelSelect.value; recompute(); });
-  channelCol.appendChild(channelSelect);
-  fieldsRow.appendChild(channelCol);
-
-  const spendCol = fieldCol("Increase total ad spend by, %");
+  const spendCol = fieldCol("Change total ad spend by, % (+ or −)");
   const spendInput = document.createElement("input");
-  spendInput.type = "number"; spendInput.min = "0"; spendInput.step = "1"; spendInput.value = String(inputs.spendIncreasePct);
+  spendInput.type = "number"; spendInput.step = "1"; spendInput.value = String(inputs.spendChangePct);
   spendInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  spendInput.addEventListener("input", () => { inputs.spendIncreasePct = Math.max(0, Number(spendInput.value) || 0); recompute(); });
+  spendInput.addEventListener("input", () => { inputs.spendChangePct = Number(spendInput.value) || 0; recompute(); });
   spendCol.appendChild(spendInput);
   fieldsRow.appendChild(spendCol);
 
@@ -2672,47 +2644,43 @@ function renderAdSpendImpact(container, ctx) {
   wrap.appendChild(outputDiv);
 
   function recompute() {
-    const channelStats = roasForChannel(inputs.channel);
     outputDiv.innerHTML = "";
 
     const roasNote = document.createElement("p");
-    roasNote.style.cssText = `font-size:12px;margin:0 0 4px;color:${isFinite(channelStats.roas) ? "var(--good)" : "#8a5a00"};`;
-    roasNote.textContent = isFinite(channelStats.roas)
-      ? `Measured ${inputs.channel} ROAS, ${channelStats.windowLabel}: ${channelStats.roas.toFixed(2)}x ` +
-        `(${fmtMoney0(channelStats.revenue)} revenue / ${fmtMoney0(channelStats.spend)} spend).`
-      : `${inputs.channel} has no measured spend in your data -- nothing to model impact from.`;
+    roasNote.style.cssText = `font-size:12px;margin:0 0 4px;color:${isFinite(roasBase) ? "var(--good)" : "#8a5a00"};`;
+    roasNote.textContent = isFinite(roasBase)
+      ? `Measured whole-business ROAS, ${roasWindowLabel}: ${roasBase.toFixed(2)}x ` +
+        `(${fmtMoney0(roasRevenue)} total revenue / ${fmtMoney0(roasSpend)} total ad spend).`
+      : "No ad spend recorded in your data -- nothing to model impact from.";
     outputDiv.appendChild(roasNote);
 
-    if (isFinite(channelStats.roas)) {
-      const seasonNote = document.createElement("p");
-      seasonNote.style.cssText = "font-size:11px;color:var(--ink-muted);margin:0 0 12px;";
-      seasonNote.textContent = "A single month's ROAS can be distorted by seasonality (a launch, a big sale) -- treat this as " +
-        "indicative of typical returns on this channel, not an exact, seasonality-adjusted figure.";
-      outputDiv.appendChild(seasonNote);
+    if (isFinite(roasBase)) {
+      const blendNote = document.createElement("p");
+      blendNote.style.cssText = "font-size:11px;color:var(--ink-muted);margin:0 0 4px;";
+      blendNote.textContent = "This is a whole-business, blended ratio (total revenue ÷ total ad spend) -- it doesn't separate out " +
+        "revenue that would have happened anyway (organic, repeat, offline), so it can overstate what THIS spend alone is driving. " +
+        "A single month's ROAS can also be distorted by seasonality (a launch, a big sale) -- treat this as indicative of typical " +
+        "returns, not an exact, seasonality-adjusted figure.";
+      outputDiv.appendChild(blendNote);
     }
 
-    if (!isFinite(channelStats.roas) || !(totalAdSpendBaseline > 0)) {
-      const p2 = document.createElement("p");
-      p2.className = "chart-caption";
-      p2.textContent = !(totalAdSpendBaseline > 0)
-        ? "No ad spend recorded in your last 3 loaded months -- nothing to compute impact from."
-        : "Pick a channel with measured spend to see its impact.";
-      outputDiv.appendChild(p2);
+    if (!isFinite(roasBase)) {
       return;
     }
 
     const result = computeAdSpendImpact({
-      totalAdSpendBaseline, totalRevenueBaseline, channelRoasBase: channelStats.roas,
-      spendIncreasePct: inputs.spendIncreasePct, declineRatePct: inputs.declineRatePct,
+      totalAdSpendBaseline, totalRevenueBaseline, roasBase,
+      spendChangePct: inputs.spendChangePct, declineRatePct: inputs.declineRatePct,
       marginPct: cov.cost ? ctx.marginPct : NaN,
     });
 
+    const dir = inputs.spendChangePct >= 0 ? "Increasing" : "Cutting";
     const headline = document.createElement("p");
-    headline.style.cssText = "font-size:14px;font-weight:600;margin:0 0 12px;";
-    headline.textContent = `Increasing ad spend by +${inputs.spendIncreasePct.toFixed(1)}% would generate about ` +
-      `+${result.revenueGrowthPct.toFixed(1)}% more revenue` +
+    headline.style.cssText = "font-size:14px;font-weight:600;margin:12px 0 12px;";
+    headline.textContent = `${dir} ad spend by ${inputs.spendChangePct >= 0 ? "+" : ""}${inputs.spendChangePct.toFixed(1)}% would generate about ` +
+      `${result.revenueGrowthPct >= 0 ? "+" : ""}${result.revenueGrowthPct.toFixed(1)}% revenue change` +
       (result.profitGrowthPct != null
-        ? ` and about ${result.profitGrowthPct >= 0 ? "+" : ""}${result.profitGrowthPct.toFixed(1)}% ${result.profitGrowthPct >= 0 ? "more" : "less"} profit.`
+        ? ` and about ${result.profitGrowthPct >= 0 ? "+" : ""}${result.profitGrowthPct.toFixed(1)}% profit change.`
         : " (add cost data to see the profit impact).");
     outputDiv.appendChild(headline);
 
@@ -2721,8 +2689,14 @@ function renderAdSpendImpact(container, ctx) {
       stopBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:12px 14px;background:#fff6ea;font-size:13px;margin-bottom:14px;";
       stopBox.innerHTML = `<strong>Honest ceiling reached.</strong> Beyond +${result.stopAtPct.toFixed(1)}% spend, extra spend loses ` +
         `money at this decline rate (marginal ROAS would drop to 1x or below) -- so this model only spends up to there, not your full ` +
-        `+${inputs.spendIncreasePct.toFixed(1)}% request.`;
+        `+${inputs.spendChangePct.toFixed(1)}% request.`;
       outputDiv.appendChild(stopBox);
+    } else if (inputs.spendChangePct < 0) {
+      const cutNote = document.createElement("p");
+      cutNote.style.cssText = "font-size:11px;color:var(--ink-muted);margin:0 0 14px;";
+      cutNote.textContent = "Modeling a cut: this mirrors the equivalent increase using the same measured ROAS and decay curve, " +
+        "applied across the full requested %, rather than a separately-fitted \"what happens when you cut\" model.";
+      outputDiv.appendChild(cutNote);
     }
 
     // Revenue Impact -- kept visually separate from Profit Impact below,
@@ -2733,9 +2707,9 @@ function renderAdSpendImpact(container, ctx) {
     outputDiv.appendChild(revHeading);
     const revTiles = document.createElement("div");
     revTiles.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;";
-    revTiles.appendChild(tile("Extra ad spend", fmtMoney0(result.spendUsed)));
-    revTiles.appendChild(tile("Extra revenue", fmtMoney0(result.revenueGained)));
-    revTiles.appendChild(tile("Revenue growth vs. baseline", (result.revenueGrowthPct >= 0 ? "+" : "") + result.revenueGrowthPct.toFixed(1) + "%"));
+    revTiles.appendChild(tile("Ad spend change", fmtMoney0(result.spendUsed)));
+    revTiles.appendChild(tile("Revenue change", fmtMoney0(result.revenueGained), result.revenueGained < 0));
+    revTiles.appendChild(tile("Revenue growth vs. baseline", (result.revenueGrowthPct >= 0 ? "+" : "") + result.revenueGrowthPct.toFixed(1) + "%", result.revenueGrowthPct < 0));
     outputDiv.appendChild(revTiles);
 
     // Profit Impact -- mandatory subtraction of the extra ad spend. Gated
@@ -2753,14 +2727,14 @@ function renderAdSpendImpact(container, ctx) {
     } else {
       const profitTiles = document.createElement("div");
       profitTiles.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:6px;";
-      profitTiles.appendChild(tile("Extra ad spend", fmtMoney0(result.spendUsed)));
-      profitTiles.appendChild(tile("Extra profit", fmtMoney0(result.profitGained), result.profitGained < 0));
+      profitTiles.appendChild(tile("Ad spend change", fmtMoney0(result.spendUsed)));
+      profitTiles.appendChild(tile("Profit change", fmtMoney0(result.profitGained), result.profitGained < 0));
       profitTiles.appendChild(tile("Profit growth vs. baseline", (result.profitGrowthPct >= 0 ? "+" : "") + result.profitGrowthPct.toFixed(1) + "%", result.profitGrowthPct < 0));
       outputDiv.appendChild(profitTiles);
       const formulaNote = document.createElement("p");
       formulaNote.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 14px;";
-      formulaNote.textContent = `Extra profit = extra revenue × your measured overall gross margin (${fmtPct1(ctx.marginPct)}) − extra ad spend. ` +
-        `Subtracting the spend is mandatory -- revenue lift and profit lift are different numbers, and profit can turn negative before ` +
+      formulaNote.textContent = `Profit change = revenue change × your measured overall gross margin (${fmtPct1(ctx.marginPct)}) − ad spend change. ` +
+        `Netting out the spend change is mandatory -- revenue lift and profit lift are different numbers, and profit can turn negative before ` +
         `revenue does (a margin under 100% means the profit break-even ROAS is higher than the 1x revenue break-even).`;
       outputDiv.appendChild(formulaNote);
     }
@@ -2770,16 +2744,20 @@ function renderAdSpendImpact(container, ctx) {
     if (result.curve.length) {
       const curveHeading = document.createElement("div");
       curveHeading.style.cssText = "font-size:12px;font-weight:600;margin:8px 0 6px;";
-      curveHeading.textContent = "Marginal ROAS as spend rises";
+      curveHeading.textContent = inputs.spendChangePct >= 0 ? "Marginal ROAS as spend rises" : "Marginal ROAS across the spend being cut";
       outputDiv.appendChild(curveHeading);
 
       // Thin the curve for the x-axis when there are many 1pp steps, so
       // labels stay legible -- the underlying math above is still computed
       // at full 1pp resolution regardless of how many points are plotted.
+      // curve.atPct is always a positive magnitude; the sign shown here
+      // matches the direction the CEO actually asked for (a cut labels as
+      // "-1%, -2%, ..." even though the underlying math mirrors an increase).
+      const dirSign = inputs.spendChangePct >= 0 ? "+" : "-";
       const maxLabels = 24;
       const stride = Math.max(1, Math.ceil(result.curve.length / maxLabels));
       const plotted = result.curve.filter((c, i) => i % stride === 0 || i === result.curve.length - 1);
-      const cats = plotted.map(c => "+" + c.atPct.toFixed(c.atPct % 1 === 0 ? 0 : 1) + "%");
+      const cats = plotted.map(c => dirSign + c.atPct.toFixed(c.atPct % 1 === 0 ? 0 : 1) + "%");
       const vals = plotted.map(c => c.marginalRoas);
       const svg = makeSvg(200);
       outputDiv.appendChild(svg);
@@ -2795,9 +2773,9 @@ function renderAdSpendImpact(container, ctx) {
     note.className = "chart-caption";
     note.style.marginTop = "10px";
     note.textContent = `Baseline (last quarter, measured): ${fmtMoney0(totalRevenueBaseline)} total company revenue, ` +
-      `${fmtMoney0(totalAdSpendBaseline)} total ad spend across all channels. The ROAS used to convert spend into revenue is ` +
-      `${inputs.channel}'s own measured figure, not a blended company-wide ratio -- blending would credit organic/offline sales to ` +
-      `ad spend that had nothing to do with them. The decline rate is your editable assumption, never derived by fitting a curve to history.`;
+      `${fmtMoney0(totalAdSpendBaseline)} total ad spend across every channel in your Marketing Spend file. This is a whole-business ` +
+      `panel, not per-product -- it needs only that one file, not a Marketing Channel column in Transactions. The decline rate is your ` +
+      `editable assumption, never derived by fitting a curve to history.`;
     outputDiv.appendChild(note);
   }
 

@@ -2584,20 +2584,30 @@ function renderAdSpendImpact(container, ctx) {
     return;
   }
 
-  const allMonths = ctx.revenueTrend.map(r => r.month);
-  const lastQuarterMonths = allMonths.slice(-3);
-  const totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(r.month)), r => r.netRevenue);
-  const totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(m.month)), m => m.spend);
-  // Whole-business ROAS: falls back to the full loaded window if the last
-  // 3 months happen to carry no recorded spend, same fallback pattern used
-  // elsewhere on this page rather than reporting nothing at all.
-  let roasBase, roasSpend = totalAdSpendBaseline, roasRevenue = totalRevenueBaseline, roasWindowLabel = "last quarter";
-  if (!(roasSpend > 0)) {
-    roasSpend = sum(ctx.mkt, m => m.spend);
-    roasRevenue = ctx.netRevenue;
-    roasWindowLabel = "your full loaded window (not enough recent months with spend)";
+  // The recent quarter is defined by the Marketing Spend FILE's own last 3
+  // distinct months -- not the Transactions file's last 3 months. Those two
+  // files can easily cover different date ranges (this panel doesn't even
+  // require them to share a channel column), and slicing by Transactions'
+  // calendar was the bug: it could produce a window with real Marketing
+  // Spend rows sitting entirely outside it, leaving the dollar-figure
+  // baseline stuck at 0 even though a full-window ROAS still looked fine.
+  // totalAdSpendBaseline and totalRevenueBaseline are the ONE canonical
+  // baseline pair -- used for BOTH the measured ROAS ratio below AND every
+  // dollar figure computeAdSpendImpact() produces, so the two can never
+  // disagree the way they did before this fix.
+  const mktMonths = Array.from(new Set(ctx.mkt.map(m => m.month))).sort();
+  const lastQuarterMonths = mktMonths.slice(-3);
+  let totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(m.month)), m => m.spend);
+  let totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(r.month)), r => r.netRevenue);
+  let roasWindowLabel = `your Marketing Spend file's last 3 months (${lastQuarterMonths.join(", ")})`;
+  // Fall back to the full loaded window ONLY if the recent quarter genuinely
+  // has zero spend rows -- never silently for a mere month-label mismatch.
+  if (!(totalAdSpendBaseline > 0)) {
+    totalAdSpendBaseline = sum(ctx.mkt, m => m.spend);
+    totalRevenueBaseline = ctx.netRevenue;
+    roasWindowLabel = "your full loaded window (the recent quarter in your Marketing Spend file has no spend)";
   }
-  roasBase = roasSpend > 0 ? roasRevenue / roasSpend : NaN;
+  const roasBase = totalAdSpendBaseline > 0 ? totalRevenueBaseline / totalAdSpendBaseline : NaN;
 
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
@@ -2650,9 +2660,16 @@ function renderAdSpendImpact(container, ctx) {
     roasNote.style.cssText = `font-size:12px;margin:0 0 4px;color:${isFinite(roasBase) ? "var(--good)" : "#8a5a00"};`;
     roasNote.textContent = isFinite(roasBase)
       ? `Measured whole-business ROAS, ${roasWindowLabel}: ${roasBase.toFixed(2)}x ` +
-        `(${fmtMoney0(roasRevenue)} total revenue / ${fmtMoney0(roasSpend)} total ad spend).`
+        `(${fmtMoney0(totalRevenueBaseline)} total revenue / ${fmtMoney0(totalAdSpendBaseline)} total ad spend).`
       : "No ad spend recorded in your data -- nothing to model impact from.";
     outputDiv.appendChild(roasNote);
+
+    const baselineSpendNote = document.createElement("p");
+    baselineSpendNote.style.cssText = "font-size:11.5px;color:var(--ink-secondary);margin:0 0 4px;";
+    baselineSpendNote.textContent = `Baseline quarterly ad spend used below: ${fmtMoney0(totalAdSpendBaseline)} ` +
+      `(sum of Spend across ${lastQuarterMonths.length} month${lastQuarterMonths.length === 1 ? "" : "s"} of your Marketing Spend file` +
+      (roasWindowLabel.startsWith("your Marketing Spend file's") ? ` -- ${lastQuarterMonths.join(", ")}` : ", full window") + ").";
+    outputDiv.appendChild(baselineSpendNote);
 
     if (isFinite(roasBase)) {
       const blendNote = document.createElement("p");

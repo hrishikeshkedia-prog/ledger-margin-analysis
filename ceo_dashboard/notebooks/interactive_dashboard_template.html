@@ -1942,7 +1942,7 @@ function computeSeasonalityBaseline(ctx, choice) {
 // change. Rendered from BOTH of renderForecast()'s branches (thin data and
 // normal), since Option A/B both still make sense even with too little
 // history for the forecast engine's own chart/backtest.
-function renderSeasonalitySourceBlock(container, ctx) {
+function renderSeasonalitySourceBlock(container, ctx, onBaselineChange) {
   const card = document.createElement("div");
   card.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-top:14px;background:var(--page);";
   container.appendChild(card);
@@ -2044,6 +2044,11 @@ function renderSeasonalitySourceBlock(container, ctx) {
     table.innerHTML = `<thead><tr><th>Month</th><th>Baseline used</th><th>Detail</th></tr></thead><tbody>${rows}</tbody>` +
       `<tfoot><tr><td><strong>Next-quarter total</strong></td><td class="num"><strong>${fmtMoney0(baseline.total)}</strong></td><td></td></tr></tfoot>`;
     resultsDiv.appendChild(table);
+
+    // Keep the Demand Forecast chart's forecast bars in lock-step with
+    // whatever this table is showing -- same baseline, same numbers,
+    // never two different pictures of "next quarter" on one panel.
+    if (onBaselineChange) onBaselineChange(baseline);
   }
 
   recomputeBaseline();
@@ -2071,18 +2076,30 @@ function renderForecast(container, ctx) {
 
   const { revenueSeries, revBacktest, revForward, unitsForward } = forecast;
 
-  // Chart: historical bars, then 3 forecast bars in a visually distinct
-  // lighter shade (never the same color as an actual), x-labeled "(f)".
+  // Chart: historical bars (fixed), then 3 forecast bars in a visually
+  // distinct lighter shade (never the same color as an actual), x-labeled
+  // "(f)". The forecast bars are REDRAWABLE: when the Seasonality Source
+  // below is "I'll set it", they must show the user-adjusted values (the
+  // exact ones feeding the Goal Planner's baseline), not the raw trend --
+  // drawForecastBars() is handed to renderSeasonalitySourceBlock as a
+  // callback so the chart, the baseline table, and the Goal Planner can
+  // never disagree. The y-domain is recomputed on every redraw too, since
+  // a +30% adjustment can push a bar above the original trend-only scale.
   const histMonths = revenueSeries.map(r => r.month);
   const histVals = revenueSeries.map(r => r.value);
   const fCats = revForward.map(f => f.month + " (f)");
-  const fVals = revForward.map(f => f.value);
-  const allCats = histMonths.concat(fCats);
-  const allVals = histVals.concat(fVals);
-  const svg = makeSvg(220);
-  container.appendChild(svg);
-  const frame = drawVFrame(svg, { yMin: 0, yMax: Math.max(...allVals, 1) * 1.15, yFormat: commas, xCategories: allCats, xRotate: true });
-  drawBars(svg, frame, allCats, allVals, (v, i) => i < histMonths.length ? COLORS.categorical[0] : COLORS.sequentialBlue[1], v => commas(v));
+  const chartWrap = document.createElement("div");
+  container.appendChild(chartWrap);
+  function drawForecastBars(forwardVals) {
+    chartWrap.innerHTML = "";
+    const svg = makeSvg(220);
+    chartWrap.appendChild(svg);
+    const allCats = histMonths.concat(fCats);
+    const allVals = histVals.concat(forwardVals);
+    const frame = drawVFrame(svg, { yMin: 0, yMax: Math.max(...allVals, 1) * 1.15, yFormat: commas, xCategories: allCats, xRotate: true });
+    drawBars(svg, frame, allCats, allVals, (v, i) => i < histMonths.length ? COLORS.categorical[0] : COLORS.sequentialBlue[1], v => commas(v));
+  }
+  drawForecastBars(revForward.map(f => f.value)); // initial draw: matches Option B (the default) exactly
 
   // Live self-validation headline -- computed on the user's own held-out
   // months, never a fabricated accuracy figure. If the held-out window
@@ -2176,8 +2193,10 @@ function renderForecast(container, ctx) {
   // The table above is this algorithm's own output, always shown as-is (its
   // historical accuracy claims above don't change based on the toggle
   // below). This next block is the SEPARATE, editable "what should the
-  // Goal Planner actually use as its baseline" choice.
-  renderSeasonalitySourceBlock(container, ctx);
+  // Goal Planner actually use as its baseline" choice -- and (via
+  // drawForecastBars) also what the chart's forecast bars show, so the
+  // chart never silently disagrees with the toggle right below it.
+  renderSeasonalitySourceBlock(container, ctx, baseline => drawForecastBars(baseline.perMonth.map(m => m.value)));
 }
 
 // Goal Planner -- a single goal-SEEK calculator with TWO levers:

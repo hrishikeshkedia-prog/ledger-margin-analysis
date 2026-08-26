@@ -1869,6 +1869,13 @@ let seasonalitySource = { mode: "auto", monthPcts: [0, 0, 0] };
 // refresh both dependent panels without forcing a full page re-render (and
 // without either panel needing to know about the other directly).
 let lastRenderedCtx = null;
+// Goal Planner's own inputs (goal type, target %, caps, decline rate),
+// hoisted to page level so a seasonality-triggered renderGoalPlanner()
+// remount (see refreshSeasonalityDependents() below) picks up whatever the
+// CEO already set instead of silently reverting to hardcoded defaults --
+// the Monthly Stack chart in particular depends on goalType surviving a
+// seasonality edit to keep showing the metric the CEO actually selected.
+let goalPlannerInputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: 0.5 };
 // Only refreshes the Goal Planner -- the Forecast panel manages its own
 // seasonality-source block in place (see renderSeasonalitySourceBlock)
 // specifically so typing into a "% change" field never gets its own input
@@ -2456,7 +2463,7 @@ function renderGoalPlanner(container, ctx) {
   baselineP.textContent = baselineNote;
   wrap.appendChild(baselineP);
 
-  const inputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: 0.5 };
+  const inputs = goalPlannerInputs;
 
   const inputsCard = document.createElement("div");
   inputsCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--page);";
@@ -2695,7 +2702,10 @@ function renderGoalPlanner(container, ctx) {
     const totalBaselineRevenue = sum(monthlyBase, m => m.value) || 1;
     const monthShares = monthlyBase.map(m => m.value / totalBaselineRevenue);
 
-    const monthlyRows = [];
+    // ONE structured array, built once, feeds BOTH the table below and the
+    // stacked chart above it -- never two separate computations of the
+    // same numbers (see the chart's own consistency requirement).
+    const monthlyData = [];
     result.paths.forEach(pth => {
       monthlyBase.forEach((m, i) => {
         const share = monthShares[i];
@@ -2705,22 +2715,113 @@ function renderGoalPlanner(container, ctx) {
         const targetShare = result.targetRupees * share;
         const achievedRevenue = priceContribution + adRev;
         const achievedProfit = adProfit != null ? priceContribution + adProfit : null;
-        monthlyRows.push(`
-          <tr>
-            <td>${pth.name}</td>
-            <td>${monthName(m.month)} ${m.month.split("-")[0]}</td>
-            <td class="num">${fmtMoney0(m.value)}</td>
-            <td class="num">${fmtMoney0(targetShare)}</td>
-            <td class="num">${fmtMoney0(priceContribution)}</td>
-            <td class="num">${fmtMoney0(adRev)}</td>
-            <td class="num" style="background:#eafaf0;">${fmtMoney0(achievedRevenue)}</td>
-            <td class="num" style="background:#eafaf0;">${achievedProfit != null ? fmtMoney0(achievedProfit) : "–"}</td>
-          </tr>`);
+        monthlyData.push({
+          pathName: pth.name, month: m.month, monthLabel: `${monthName(m.month)} ${m.month.split("-")[0]}`,
+          baseline: m.value, targetShare, priceContribution, adRev, adProfit, achievedRevenue, achievedProfit,
+        });
       });
     });
+
+    // Stacked chart -- visualizes ONE path at a time (picked below,
+    // default Balanced); every number it draws is read straight off
+    // monthlyData, never recomputed. Bottom to top: baseline (always
+    // revenue, same as the table's own convention) + price contribution +
+    // ad-spend contribution, in whichever metric (revenue or profit) the
+    // Goal type toggle currently has active -- so the full stacked height
+    // is that month's baseline plus both levers' contribution to the
+    // active goal, exactly as specified.
+    const chartHeading = document.createElement("div");
+    chartHeading.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:4px 0 6px;";
+    const chartTitle = document.createElement("div");
+    chartTitle.style.cssText = "font-size:12px;font-weight:600;";
+    chartTitle.textContent = `Monthly Stack (${inputs.goalType === "revenue" ? "revenue" : "profit"})`;
+    chartHeading.appendChild(chartTitle);
+
+    const pathSelectWrap = document.createElement("div");
+    pathSelectWrap.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-muted);";
+    const pathSelectLabel = document.createElement("span");
+    pathSelectLabel.textContent = "Path shown:";
+    pathSelectWrap.appendChild(pathSelectLabel);
+    const pathSelect = document.createElement("select");
+    pathSelect.style.cssText = "font-size:11px;padding:3px 4px;border:1px solid var(--grid);border-radius:4px;";
+    result.paths.forEach(pth => {
+      const opt = document.createElement("option");
+      opt.value = pth.name; opt.textContent = pth.name;
+      if (pth.name === "Balanced") opt.selected = true;
+      pathSelect.appendChild(opt);
+    });
+    pathSelectWrap.appendChild(pathSelect);
+    chartHeading.appendChild(pathSelectWrap);
+    outputDiv.appendChild(chartHeading);
+
+    const legendRow = document.createElement("div");
+    legendRow.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--ink-secondary);margin-bottom:6px;";
+    const barColors = { baseline: COLORS.sequentialBlue[1], price: COLORS.categorical[2], ad: COLORS.categorical[3] };
+    [["baseline", "Baseline (revenue)"], ["price", "Price lever"], ["ad", "Ad-spend lever (quarter-split)"]].forEach(([key, label]) => {
+      const item = document.createElement("span");
+      item.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+      item.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${barColors[key]};"></span>${label}`;
+      legendRow.appendChild(item);
+    });
+    const targetLegend = document.createElement("span");
+    targetLegend.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+    targetLegend.innerHTML = `<span style="display:inline-block;width:14px;height:0;border-top:2px dashed ${COLORS.status.critical};"></span>Target level (baseline + target share)`;
+    legendRow.appendChild(targetLegend);
+    outputDiv.appendChild(legendRow);
+
+    const chartSvg = makeSvg(230);
+    outputDiv.appendChild(chartSvg);
+
+    function drawMonthlyStack(pathName) {
+      chartSvg.innerHTML = "";
+      const rows = monthlyBase.map((m, i) => monthlyData.find(d => d.pathName === pathName && d.month === m.month));
+      const cats = rows.map(r => r.monthLabel);
+      const useProfit = inputs.goalType === "profit";
+      const levers = rows.map(r => useProfit ? { price: Math.max(0, r.priceContribution), ad: Math.max(0, r.adProfit || 0) }
+                                              : { price: Math.max(0, r.priceContribution), ad: Math.max(0, r.adRev) });
+      const totals = rows.map((r, i) => r.baseline + levers[i].price + levers[i].ad);
+      const targetTicks = rows.map(r => r.baseline + r.targetShare);
+      const yMax = Math.max(...totals, ...targetTicks, 1) * 1.12;
+      const frame = drawVFrame(chartSvg, { yMin: 0, yMax, yFormat: commas, xCategories: cats, marginB: 28 });
+      rows.forEach((r, i) => {
+        const x = frame.xScale(cats[i]), w = frame.xScale.bandwidth;
+        let cum = 0;
+        [["baseline", r.baseline], ["price", levers[i].price], ["ad", levers[i].ad]].forEach(([key, val]) => {
+          const yTop = frame.yScale(cum + val), yBottom = frame.yScale(cum);
+          const h = Math.max(0, yBottom - yTop);
+          if (h > 0) chartSvg.appendChild(se("rect", { x, y: yTop, width: w, height: h, fill: barColors[key] }));
+          cum += val;
+        });
+        const ty = frame.yScale(targetTicks[i]);
+        chartSvg.appendChild(se("line", { x1: x, x2: x + w, y1: ty, y2: ty, stroke: COLORS.status.critical, "stroke-width": 2, "stroke-dasharray": "3 2" }));
+        chartSvg.appendChild(text(x + w / 2, frame.yScale(cum) - 6, fmtMoney0(cum), "bar-label", { "text-anchor": "middle" }));
+      });
+    }
+    drawMonthlyStack("Balanced");
+    pathSelect.addEventListener("change", () => drawMonthlyStack(pathSelect.value));
+
+    const chartNote = document.createElement("p");
+    chartNote.className = "chart-caption";
+    chartNote.style.margin = "2px 0 12px;";
+    chartNote.textContent = "Each bar's total height = that month's baseline + the selected path's price and ad-spend contributions for the " +
+      "active Goal type -- the same numbers as the table below, never recomputed. The dashed line marks baseline + that month's target share; " +
+      "the bar reaching or passing it means the levers close that month's share of the target.";
+    outputDiv.appendChild(chartNote);
+
     const monthlyTable = document.createElement("table");
     monthlyTable.className = "data-table";
     monthlyTable.style.fontSize = "12px";
+    const monthlyRows = monthlyData.map(d => `
+      <tr>
+        <td>${d.pathName}</td>
+        <td>${d.monthLabel}</td>
+        <td class="num">${fmtMoney0(d.baseline)}</td>
+        <td class="num">${fmtMoney0(d.targetShare)}</td>
+        <td class="num">${fmtMoney0(d.priceContribution)}</td>
+        <td class="num">${fmtMoney0(d.adRev)}</td>
+        <td class="num" style="background:#eafaf0;">${fmtMoney0(d.achievedRevenue)}</td>
+        <td class="num" style="background:#eafaf0;">${d.achievedProfit != null ? fmtMoney0(d.achievedProfit) : "–"}</td>
+      </tr>`);
     monthlyTable.innerHTML = `<thead><tr><th>Path</th><th>Month</th><th>Baseline (revenue)</th><th>Target share</th>` +
       `<th>Price lever</th><th>Ad-spend lever (quarter-split)</th><th>Achieved revenue</th><th>Achieved profit</th></tr></thead>` +
       `<tbody>${monthlyRows.join("")}</tbody>`;

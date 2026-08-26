@@ -510,6 +510,20 @@ function nextMonthStr(monthStr) {
   m += 1; if (m > 12) { m = 1; y += 1; }
   return y + "-" + String(m).padStart(2, "0");
 }
+// Canonicalizes any date-ish month value (e.g. "2026-05", "2026-05-01",
+// "05/01/2026") to the same "YYYY-MM" shape monthKey(date) produces from
+// Transactions rows. Needed anywhere a month key from one file (e.g.
+// Marketing Spend) gets compared against a month key from another (e.g.
+// Transactions, via Engine.revenueTrend) -- comparing raw, unnormalized
+// strings silently matches nothing if the two files spell months
+// differently, even when both plainly cover the same months.
+function normMonthKey(raw) {
+  const s = String(raw).trim();
+  const d = parseDate(s);
+  if (d) return monthKey(d);
+  const m = s.match(/^(\d{4})-(\d{2})/); // best-effort fallback if parseDate can't handle it
+  return m ? `${m[1]}-${m[2]}` : s;
+}
 const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function monthName(monthStr) { return MONTH_NAMES[calMonthNum(monthStr)]; }
 function groupBy(arr, keyFn) {
@@ -791,7 +805,10 @@ function buildMarketing(rawRows, mapping) {
     const spend = toNumber(r[mapping.spend]);
     const channel = mapping.channel ? String(r[mapping.channel]) : null;
     if (!channel || !isFinite(spend)) return;
-    out.push({ month: mapping.month ? String(r[mapping.month]) : "all", channel, spend });
+    // Normalized to "YYYY-MM" (see normMonthKey) so this always matches
+    // Transactions' month keys regardless of how this file spells its
+    // dates (a bare "2026-05" and a full "2026-05-01" are the same month).
+    out.push({ month: mapping.month ? normMonthKey(r[mapping.month]) : "all", channel, spend });
   });
   return out;
 }
@@ -2595,10 +2612,14 @@ function renderAdSpendImpact(container, ctx) {
   // baseline pair -- used for BOTH the measured ROAS ratio below AND every
   // dollar figure computeAdSpendImpact() produces, so the two can never
   // disagree the way they did before this fix.
-  const mktMonths = Array.from(new Set(ctx.mkt.map(m => m.month))).sort();
+  // Both sides are run through normMonthKey() here even though buildMarketing()
+  // already normalizes m.month at the source -- comparing two ALREADY-normalized
+  // keys is a harmless no-op, and it means this comparison can't silently break
+  // again if that upstream normalization ever changes.
+  const mktMonths = Array.from(new Set(ctx.mkt.map(m => normMonthKey(m.month)))).sort();
   const lastQuarterMonths = mktMonths.slice(-3);
-  let totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(m.month)), m => m.spend);
-  let totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(r.month)), r => r.netRevenue);
+  let totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(normMonthKey(m.month))), m => m.spend);
+  let totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(normMonthKey(r.month))), r => r.netRevenue);
   let roasWindowLabel = `your Marketing Spend file's last 3 months (${lastQuarterMonths.join(", ")})`;
   // Fall back to the full loaded window ONLY if the recent quarter genuinely
   // has zero spend rows -- never silently for a mere month-label mismatch.

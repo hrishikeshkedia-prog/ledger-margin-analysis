@@ -152,15 +152,15 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
           <p style="font-size:11px;color:var(--ink-muted);margin:6px 0 0;">Want to see graceful degradation? Try
             <code>sample_data/thin_monthly_revenue.csv</code> (only month + revenue -- core panels only) or
             <code>sample_data/dashboard_ready_transactions.csv</code> (adds cost + a Cost Breakdown / Macro Prices file --
-            unlocks External Cost Sensitivity's full library, both bundled alongside this page). To see Ad-Spend
-            Impact, load any Transactions file (channel column not required) and upload
+            unlocks External Cost Sensitivity's full library, both bundled alongside this page). To see the Goal
+            Planner's ad-spend lever, load any Transactions file (channel column not required) and upload
             <code>sample_data/ad_spend_impact_marketing.csv</code> below on its own.</p>
         </div>
         <div class="upload-card">
           <h4>Marketing Spend (optional)</h4>
-          <p>Month, channel, spend. On its own, this unlocks Ad-Spend Impact (a whole-business, blended-ROAS
-            what-if -- no channel mapping needed in Transactions). Paired with a mapped "Marketing Channel"
-            column above, it also unlocks Channel Economics (per-channel, un-blended).</p>
+          <p>Month, channel, spend. On its own, this unlocks the Goal Planner's ad-spend lever (a
+            whole-business, blended-ROAS ratio -- no channel mapping needed in Transactions). Paired with a
+            mapped "Marketing Channel" column above, it also unlocks Channel Economics (per-channel, un-blended).</p>
           <input type="file" id="file-marketing" accept=".csv">
           <div class="filename" id="filename-marketing">No file loaded for this business -- upload one to unlock Channel Economics.</div>
         </div>
@@ -284,11 +284,6 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
     <div class="chart-block" id="panel-goal-planner"></div>
   </section>
 
-  <section id="sec-ad-impact">
-    <h2>Ad-Spend Impact</h2>
-    <div class="chart-block" id="panel-ad-impact"></div>
-  </section>
-
   <section id="sec-sensitivity">
     <h2>External Cost Sensitivity</h2>
     <div class="chart-block" id="panel-sensitivity"></div>
@@ -362,45 +357,35 @@ table.editable-table input[type=checkbox] { transform: scale(1.1); }
         library" rather than assigned a guessed driver. If a Macro Prices file is also supplied, the panel
         can suggest a price move % from the latest value vs. a baseline month the CEO picks -- still just a
         typed-in scenario, never an auto-applied prediction.</li>
-      <li><strong>Goal Planner is a goal-seek calculator built on real per-category margin, with two
-        explicitly assumption-laden levers.</strong> Per-category revenue, cost, margin, and average
-        price/cost per unit are all measured straight from your loaded rows (Engine.categoryStats) --
-        nothing there is inferred. The PRICE lever (raise average selling price up to a cap, units held
-        fixed) rests on the unmodeled assumption that demand holds at the higher price -- real price
-        elasticity isn't estimated anywhere in this tool. The PRODUCT-MIX lever (shift units from the
-        category worst-suited to your goal toward the one best-suited, up to a cap) assumes those shifted
-        units sell through at the recipient category's own average price/margin -- real substitution
-        effects (would the customer actually have bought the pricier item instead, or not bought at all?)
-        aren't modeled. Both caps, and the price lever's "demand holds" and mix lever's "sells through as
-        assumed" framing, are visibly labeled and fully editable. The next-quarter baseline reuses the
-        Demand Forecast panel's seasonal forecast when there's enough history for one; with less, it falls
-        back to a flat run-rate (average monthly revenue x 3), labeled as such rather than passed off as a
-        seasonal forecast it isn't. If no combination of the two levers within their caps reaches the
-        target, the panel says so plainly -- the closest reachable % and which cap is binding -- rather
-        than stretching either assumption to force a "yes".</li>
-      <li><strong>Ad-Spend Impact is a separate, whole-business what-if, gated ONLY on a Marketing Spend
-        file -- never per-SKU, never a flat conversion.</strong> Unlike Channel Economics on this same page,
-        it deliberately does NOT require a Marketing Channel column in Transactions: it needs only the
-        Marketing Spend file (Month, Channel, Spend) to compute a whole-business, BLENDED ROAS -- total
-        company revenue ÷ total ad spend across every row of that file, over the last 3 loaded months
-        (falling back to the full window if that's thin). Being blended is a real limitation, stated
-        plainly here: this ratio doesn't separate out revenue that would have happened anyway (organic,
-        repeat, offline), so it can overstate what the ad spend itself is driving -- the panel labels this
-        explicitly rather than pretending it isolated paid-channel performance the way a true per-channel
-        ROAS would. The CEO's input is signed (+ to model an increase, − a cut). Extra spend is modeled in
-        1-percentage-point increments with marginal ROAS decaying geometrically from that measured base by
-        an editable decline rate (default 0.5%/point, deliberately gentle -- informed by, but not fit to, a
-        real observation of a large spend jump seeing marginal ROAS fall from ~2.5x toward ~1.85x) -- never
-        a flat ROAS applied to the whole request. An INCREASE stops early, with an explicit "beyond this
-        much spend, extra spend loses money" message, if marginal ROAS would fall to 1x or below before the
-        requested change is fully applied; a CUT has no such ceiling (existing spend isn't assumed
-        unprofitable just because more would be) and is instead modeled as the mirror image of the
-        equivalent increase, applied in full -- a stated simplification, not a separately-fitted "cut"
-        model. Profit Impact is reported separately from Revenue Impact (revenue change × measured overall
-        gross margin, minus the ad spend change -- sign-agnostic, so it works for cuts too -- gated on Cost
-        being mapped) -- because margin is under 100%, profit can and does turn negative at a lower spend
-        increase than revenue does, and this panel reports that plainly rather than only showing the more
-        flattering top-line number.</li>
+      <li><strong>Goal Planner is a single goal-seek calculator with two levers, each grounded in a
+        different measured ratio -- never a cross-category substitution guess.</strong> A PRODUCT-MIX lever
+        used to live here (shift units between categories) and has been removed entirely: it rested on an
+        uncalculable assumption (shifted units selling through at the destination category's own margin,
+        with no way to verify a customer would actually have bought the pricier item instead of walking
+        away) that neither remaining lever shares. The PRICE lever (raise average selling price up to a
+        cap, units held fixed) rests on the unmodeled assumption that demand holds at the higher price --
+        real price elasticity isn't estimated anywhere in this tool -- but its baseline (current revenue)
+        is real. The AD-SPEND lever computes a whole-business, BLENDED ROAS -- total company revenue ÷
+        total ad spend, both from the last 3 months of the Marketing Spend file's own calendar (both sides
+        normalized to the same "YYYY-MM" month-key shape before comparing, so a file spelling dates as
+        "2026-05-01" still matches Transactions' "2026-05" and revenue is never wrongly read as zero) --
+        then applies EDITABLE, geometrically diminishing returns to extra spend (default decline 0.5%/point,
+        deliberately gentle -- informed by, but not fit to, a real observation of a large spend jump seeing
+        marginal ROAS fall from ~2.5x toward ~1.85x). Requires a Marketing Spend file; without one this
+        lever contributes nothing and says so, while the price lever still works standalone. Being blended
+        is a real limitation, stated plainly: the ROAS doesn't separate out revenue that would have happened
+        anyway (organic, repeat, offline), so it can overstate what the ad spend itself is driving. In
+        PROFIT mode the ad lever nets its own extra spend out of its contribution (revenue × measured
+        margin − spend) and its useful range is capped wherever marginal PROFIT (not just marginal revenue)
+        stops paying for itself -- since margin is under 100%, that point comes before revenue's own 1x
+        ceiling, so a path never recommends spending further just because revenue would still technically
+        grow. The next-quarter baseline reuses the Demand Forecast panel's seasonal forecast when there's
+        enough history for one; with less, it falls back to a flat run-rate, labeled as such rather than
+        passed off as a seasonal forecast it isn't. Ranked paths (Price-led / Ad-led / Balanced) each show
+        both levers' moves and an achieved result recomputed independently from those exact moves, never
+        assumed equal to the target; if no combination within both caps reaches the target, the panel says
+        so plainly -- the closest reachable % and which cap is binding -- rather than stretching either
+        assumption to force a "yes".</li>
     </ul>
   </footer>
 
@@ -928,29 +913,6 @@ Engine.marginBySku = txns => {
     const unitsSold = sum(rows, t => t.isReturn ? 0 : t.quantity);
     return { sku, category, netRevenue, netCost, marginAbs, unitsSold };
   });
-};
-
-// Per-category (or per-SKU, if Category isn't mapped -- buildTransactions()
-// falls every unmapped row back to a single "All" category) revenue/cost/
-// margin, plus average price and average cost PER UNIT -- the measured
-// building blocks the Goal Planner's price and product-mix levers are built
-// from. Every number here comes straight off the loaded rows; nothing here
-// is an assumption.
-Engine.categoryStats = txns => {
-  const byCategory = groupBy(txns, t => t.category);
-  const out = [];
-  byCategory.forEach((rows, category) => {
-    const units = sum(rows, t => t.isReturn ? 0 : t.quantity);
-    const revenue = sum(rows, Engine.netRevenue);
-    const cost = sum(rows, Engine.netCost);
-    const margin = revenue - cost;
-    const marginPct = revenue ? margin / revenue : NaN;
-    const avgPrice = units ? revenue / units : NaN;
-    const avgCost = units ? cost / units : NaN;
-    const avgMarginPerUnit = avgPrice - avgCost;
-    out.push({ category, units, revenue, cost, margin, marginPct, avgPrice, avgCost, avgMarginPerUnit });
-  });
-  return out.sort((a, b) => b.revenue - a.revenue);
 };
 
 // Top-N revenue concentration -- same "Pareto view" as core.py's sku_concentration.
@@ -2218,28 +2180,78 @@ function renderForecast(container, ctx) {
   renderSeasonalitySourceBlock(container, ctx);
 }
 
-// Goal Planner -- a goal-SEEK calculator built entirely from real, measured
-// order-level data (per-category revenue, cost, and margin -- see
-// Engine.categoryStats above). Two levers, both capped by the CEO:
-//   1. PRICE: raise the average selling price uniformly across categories,
-//      up to a max % (units held fixed). Extra revenue this creates is
-//      pure margin too, since per-unit cost doesn't move -- but it rests on
-//      an unmodeled ASSUMPTION that demand holds at the higher price.
-//   2. PRODUCT MIX: shift units from the category with the worst per-unit
-//      metric for the chosen goal to the one with the best, up to a max %
-//      of total unit volume. Rests on the ASSUMPTION that shifted units
-//      sell through at the recipient category's own average price/margin.
+// Goal Planner -- a single goal-SEEK calculator with TWO levers:
+//   1. PRICE: raise the average selling price, up to a max % (units held
+//      fixed). Extra revenue this creates is pure margin too, since
+//      per-unit cost doesn't move -- but it rests on an unmodeled
+//      ASSUMPTION that demand holds at the higher price.
+//   2. AD SPEND: raise total revenue via MEASURED whole-business ROAS
+//      (total revenue / total ad spend, from the Marketing Spend file's
+//      own last 3 months -- both sides run through normMonthKey() so a
+//      file spelling months as "2026-05-01" still matches Transactions'
+//      canonical "2026-05"), with DIMINISHING RETURNS: extra spend decays
+//      geometrically from that measured base by an editable decline rate,
+//      never a flat conversion. Requires a Marketing Spend file; without
+//      one this lever contributes nothing and says so, while the price
+//      lever still works.
+// A PRODUCT-MIX lever previously lived here too and has been deleted
+// entirely: it rested on an uncalculable assumption (shifted units
+// selling through at the destination category's margin) that the price
+// and ad-spend levers above don't share -- both are grounded in a single
+// measured ratio (price: existing per-unit economics; ad spend: measured
+// ROAS), not a cross-category substitution guess.
+//
 // The target (%growth next quarter) is measured against a baseline that
-// reuses the existing seasonal Demand Forecast when there's enough history,
-// falling back to a flat run-rate (clearly labeled) otherwise. If no
-// combination of the two levers within their caps reaches the target, that
-// is reported plainly -- the most reachable % and which cap is binding --
-// never stretched to force a "yes".
-function computeGoalPaths(p) {
-  const metricKey = p.goalType === "revenue" ? "avgPrice" : "avgMarginPerUnit";
-  const cats = p.categories;
-  const totalQuarterUnits = sum(cats, c => c.units * p.quarterUnitsScale);
+// reuses the existing seasonal Demand Forecast when there's enough
+// history, falling back to a flat run-rate (clearly labeled) otherwise --
+// unchanged from before. If no combination of the two levers within their
+// caps reaches the target, that is reported plainly -- the most reachable
+// % and which cap is binding -- never stretched to force a "yes".
+//
+// PROFIT mode nets the ad lever's own spend out of its contribution
+// (revenue x measured margin - spend), so profit and revenue paths can
+// genuinely differ, and profit's useful ad-spend range is capped where
+// marginal PROFIT (not just marginal revenue) stops paying for itself --
+// pushing ad spend further than that only hurts profit even if revenue
+// is technically still rising, so paths never recommend it.
 
+// Low-level, reusable diminishing-returns stepper: applies `magnitudePct`
+// percentage points of `baselineSpend` in 1-point increments, each point's
+// marginal ROAS decaying geometrically from `roasBase`. Stops early if the
+// marginal ROAS would fall to or below `roasFloor` (1 for a pure-revenue
+// ceiling; 1/marginPct for a profit ceiling; -Infinity to never stop, used
+// by the goal-seek's own unrestricted evaluators below).
+function computeAdSpendCurve(baselineSpend, roasBase, magnitudePct, declineRatePct, roasFloor) {
+  const stepRupees = baselineSpend / 100;
+  const mag = Math.max(0, magnitudePct);
+  const fullSteps = Math.floor(mag);
+  const remainderPct = mag - fullSteps;
+  const curve = [];
+  let cumulativeSpend = 0, cumulativeRevenue = 0, stoppedEarly = false, stopAtPct = null;
+
+  function applyStep(pct, decaySteps) {
+    const marginalRoas = roasBase * Math.pow(1 - declineRatePct / 100, decaySteps);
+    if (marginalRoas <= roasFloor) return false;
+    const spendThisStep = stepRupees * pct;
+    const revenueThisStep = spendThisStep * marginalRoas;
+    cumulativeSpend += spendThisStep;
+    cumulativeRevenue += revenueThisStep;
+    const atPct = (curve.length ? curve[curve.length - 1].atPct : 0) + pct;
+    curve.push({ atPct, marginalRoas, cumulativeSpend, cumulativeRevenue });
+    return true;
+  }
+
+  for (let i = 0; i < fullSteps; i++) {
+    if (!applyStep(1, i)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); break; }
+  }
+  if (!stoppedEarly && remainderPct > 1e-9) {
+    if (!applyStep(remainderPct, fullSteps)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); }
+  }
+
+  return { spendRupees: cumulativeSpend, revenueRupees: cumulativeRevenue, curve, stoppedEarly, stopAtPct };
+}
+
+function computeGoalPaths(p) {
   // Price lever: baselineRevenueNextQ x priceCapPct/100. Same rupee figure
   // funds either goal, since a price rise with unchanged unit cost is pure
   // margin.
@@ -2248,72 +2260,112 @@ function computeGoalPaths(p) {
     maxContributionRupees: p.baselineRevenueNextQ * (p.priceCapPct / 100),
   };
 
-  // Mix lever: needs at least 2 categories to have a "from" and a "to".
-  let mixLever;
-  if (cats.length >= 2) {
-    const ranked = cats.slice().sort((a, b) => b[metricKey] - a[metricKey]);
-    const best = ranked[0], worst = ranked[ranked.length - 1];
-    const donorQuarterUnits = worst.units * p.quarterUnitsScale;
-    const maxShiftUnits = Math.max(0, Math.min(donorQuarterUnits, (p.mixCapPct / 100) * totalQuarterUnits));
-    const deltaPerUnit = best[metricKey] - worst[metricKey];
-    mixLever = {
-      capPct: p.mixCapPct, available: true, donor: worst.category, recipient: best.category,
-      maxShiftUnits, deltaPerUnit, maxContributionRupees: maxShiftUnits * deltaPerUnit,
+  const marginKnown = isFinite(p.totalMarginPct);
+
+  // Ad-spend lever: bounded separately for revenue vs. profit, since
+  // profit's useful range can be SHORTER (marginal profit turns negative
+  // before marginal revenue does, once margin < 100%).
+  let adLever;
+  if (p.adAvailable && p.adSpendCapPct > 0 && p.adRoasBase > 0) {
+    const revCurve = computeAdSpendCurve(p.adBaselineSpend, p.adRoasBase, p.adSpendCapPct, p.adDeclineRatePct, 1);
+    const profitFloor = marginKnown && p.totalMarginPct > 0 ? 1 / p.totalMarginPct : Infinity;
+    const profitCurve = marginKnown ? computeAdSpendCurve(p.adBaselineSpend, p.adRoasBase, p.adSpendCapPct, p.adDeclineRatePct, profitFloor) : null;
+    adLever = {
+      capPct: p.adSpendCapPct, available: true,
+      maxRevenueContributionRupees: revCurve.revenueRupees,
+      revStoppedEarly: revCurve.stoppedEarly, revStopAtPct: revCurve.stopAtPct,
+      maxProfitContributionRupees: profitCurve ? (profitCurve.revenueRupees * p.totalMarginPct - profitCurve.spendRupees) : null,
+      profitUsefulCapPct: profitCurve ? (profitCurve.stoppedEarly ? profitCurve.stopAtPct : p.adSpendCapPct) : null,
     };
   } else {
-    mixLever = {
-      capPct: p.mixCapPct, available: false, donor: null, recipient: null,
-      maxShiftUnits: 0, deltaPerUnit: 0, maxContributionRupees: 0,
-      note: "Only one category detected -- map a Category column with 2+ distinct values to unlock the product-mix lever.",
+    adLever = {
+      capPct: p.adSpendCapPct, available: false,
+      maxRevenueContributionRupees: 0, maxProfitContributionRupees: marginKnown ? 0 : null,
+      note: !p.adAvailable ? "Add a Marketing Spend file (Month, Channel, Spend) to unlock the ad-spend lever -- the price lever still works without it." : null,
     };
   }
 
   const baselineMetricNextQ = p.goalType === "revenue" ? p.baselineRevenueNextQ : p.baselineRevenueNextQ * p.totalMarginPct;
   const targetRupees = baselineMetricNextQ * (p.targetPct / 100);
-  const maxReachableRupees = priceLever.maxContributionRupees + mixLever.maxContributionRupees;
+  const adMaxContribution = p.goalType === "revenue" ? adLever.maxRevenueContributionRupees : (adLever.maxProfitContributionRupees || 0);
+  const maxReachableRupees = priceLever.maxContributionRupees + adMaxContribution;
   const maxReachablePct = baselineMetricNextQ ? (maxReachableRupees / baselineMetricNextQ) * 100 : 0;
   const reachable = maxReachableRupees >= targetRupees - 1e-6;
 
-  // Binding limit: whichever lever earns more rupees per percentage point
-  // of its own cap is the more efficient one to raise further.
   const pricePerPoint = priceLever.capPct > 0 ? priceLever.maxContributionRupees / priceLever.capPct : 0;
-  const mixPerPoint = (mixLever.available && mixLever.capPct > 0) ? mixLever.maxContributionRupees / mixLever.capPct : 0;
-  const bindingLimit = reachable ? null : (mixPerPoint > pricePerPoint ? "mix" : "price");
+  const adPerPoint = (adLever.available && adLever.capPct > 0) ? adMaxContribution / adLever.capPct : 0;
+  const bindingLimit = reachable ? null : (adPerPoint > pricePerPoint ? "ad" : "price");
 
-  function pathFrom(priceUsedPct, unitsShifted) {
-    const priceUsed = Math.max(0, Math.min(priceLever.capPct, priceUsedPct));
-    const priceContribution = p.baselineRevenueNextQ * (priceUsed / 100);
-    const shift = Math.max(0, Math.min(mixLever.maxShiftUnits, unitsShifted));
-    const mixContribution = shift * (mixLever.deltaPerUnit || 0);
-    const achievedRupees = priceContribution + mixContribution;
+  // The ad lever's SEARCH range never exceeds where it stops helping the
+  // ACTIVE goal -- so a path never recommends spending past the point
+  // where more ad spend would only hurt (profit mode) or do nothing
+  // (revenue mode past its own 1x ceiling).
+  const adSearchCapPct = !adLever.available ? 0
+    : p.goalType === "revenue" ? (adLever.revStoppedEarly ? adLever.revStopAtPct : adLever.capPct)
+    : (adLever.profitUsefulCapPct != null ? adLever.profitUsefulCapPct : adLever.capPct);
+
+  function adRevenueAt(pctUsed) {
+    if (!adLever.available || pctUsed <= 0) return 0;
+    return computeAdSpendCurve(p.adBaselineSpend, p.adRoasBase, pctUsed, p.adDeclineRatePct, -Infinity).revenueRupees;
+  }
+  function adSpendRupeesAt(pctUsed) {
+    if (!adLever.available || pctUsed <= 0) return 0;
+    return computeAdSpendCurve(p.adBaselineSpend, p.adRoasBase, pctUsed, p.adDeclineRatePct, -Infinity).spendRupees;
+  }
+  function adMetricAt(pctUsed) {
+    const rev = adRevenueAt(pctUsed);
+    return p.goalType === "revenue" ? rev : (rev * p.totalMarginPct - adSpendRupeesAt(pctUsed));
+  }
+  function priceMetricAt(pctUsed) {
+    return p.baselineRevenueNextQ * (Math.max(0, Math.min(priceLever.capPct, pctUsed)) / 100);
+  }
+  // Bisection for the smallest ad% in [0, adSearchCapPct] whose metric
+  // contribution closes a rupee gap -- adMetricAt() is monotonic
+  // non-decreasing across that bounded range by construction (see above).
+  function adPctForGap(gapRupees) {
+    if (adSearchCapPct <= 0 || gapRupees <= 0) return 0;
+    if (adMetricAt(adSearchCapPct) <= gapRupees) return adSearchCapPct;
+    let lo = 0, hi = adSearchCapPct;
+    for (let i = 0; i < 40; i++) {
+      const mid = (lo + hi) / 2;
+      if (adMetricAt(mid) < gapRupees) lo = mid; else hi = mid;
+    }
+    return hi;
+  }
+
+  function pathFrom(pricePctUsed, adPctUsed) {
+    const priceUsed = Math.max(0, Math.min(priceLever.capPct, pricePctUsed));
+    const adUsed = Math.max(0, Math.min(adSearchCapPct, adPctUsed));
+    const priceContribution = priceMetricAt(priceUsed);
+    const adRevContribution = adRevenueAt(adUsed);
+    const adSpendRupees = adSpendRupeesAt(adUsed);
+    const adMetricContribution = p.goalType === "revenue" ? adRevContribution : (adRevContribution * p.totalMarginPct - adSpendRupees);
+    const achievedRupees = priceContribution + adMetricContribution;
     const achievedPct = baselineMetricNextQ ? (achievedRupees / baselineMetricNextQ) * 100 : 0;
-    return { priceUsedPct: priceUsed, priceContribution, unitsShifted: shift, mixContribution, achievedRupees, achievedPct };
+    return { priceUsedPct: priceUsed, adUsedPct: adUsed, adSpendRupees, priceContribution, adMetricContribution, achievedRupees, achievedPct };
   }
 
   const paths = [];
   if (reachable && targetRupees > 0) {
-    // Price-led: use only as much price rise as needed; top up with mix
-    // only if price alone can't close the gap.
+    // Price-led: use only as much price as needed; top up with ad spend.
     const priceOnlyNeededPct = p.baselineRevenueNextQ > 0 ? (targetRupees / p.baselineRevenueNextQ) * 100 : Infinity;
     const priceLedPriceUsed = Math.min(priceLever.capPct, priceOnlyNeededPct);
-    const priceLedGap = Math.max(0, targetRupees - p.baselineRevenueNextQ * (priceLedPriceUsed / 100));
-    const priceLedUnits = mixLever.deltaPerUnit > 0 ? priceLedGap / mixLever.deltaPerUnit : 0;
-    paths.push({ name: "Price-led", ...pathFrom(priceLedPriceUsed, priceLedUnits) });
+    const priceLedGap = Math.max(0, targetRupees - priceMetricAt(priceLedPriceUsed));
+    paths.push({ name: "Price-led", ...pathFrom(priceLedPriceUsed, adPctForGap(priceLedGap)) });
 
-    // Mix-led: use only as much shift as needed; top up with price.
-    const mixOnlyNeededUnits = mixLever.deltaPerUnit > 0 ? targetRupees / mixLever.deltaPerUnit : Infinity;
-    const mixLedUnits = Math.min(mixLever.maxShiftUnits, mixOnlyNeededUnits);
-    const mixLedGap = Math.max(0, targetRupees - mixLedUnits * (mixLever.deltaPerUnit || 0));
-    const mixLedPricePct = p.baselineRevenueNextQ > 0 ? (mixLedGap / p.baselineRevenueNextQ) * 100 : 0;
-    paths.push({ name: "Mix-led", ...pathFrom(mixLedPricePct, mixLedUnits) });
+    // Ad-led: use only as much ad spend as needed; top up with price.
+    const adLedAdUsed = adPctForGap(targetRupees);
+    const adLedGap = Math.max(0, targetRupees - adMetricAt(adLedAdUsed));
+    const adLedPricePct = p.baselineRevenueNextQ > 0 ? Math.min(priceLever.capPct, (adLedGap / p.baselineRevenueNextQ) * 100) : 0;
+    paths.push({ name: "Ad-led", ...pathFrom(adLedPricePct, adLedAdUsed) });
 
-    // Balanced: use the same fraction of each lever's own cap.
+    // Balanced: the same fraction of each lever's own (useful) cap.
     const f = maxReachableRupees > 0 ? Math.min(1, targetRupees / maxReachableRupees) : 0;
-    paths.push({ name: "Balanced", ...pathFrom(priceLever.capPct * f, mixLever.maxShiftUnits * f) });
+    paths.push({ name: "Balanced", ...pathFrom(priceLever.capPct * f, adSearchCapPct * f) });
   }
 
   return {
-    baselineMetricNextQ, targetRupees, targetPct: p.targetPct, priceLever, mixLever,
+    baselineMetricNextQ, targetRupees, targetPct: p.targetPct, priceLever, adLever, adSearchCapPct,
     maxReachableRupees, maxReachablePct, reachable, bindingLimit, paths,
   };
 }
@@ -2325,14 +2377,10 @@ function renderGoalPlanner(container, ctx) {
   if (!cov.cost) {
     const p = document.createElement("p");
     p.className = "chart-caption"; p.style.margin = "4px 0";
-    p.textContent = "Add cost data to unlock the Goal Planner -- map a Cost column in Transactions so real per-category margin can be computed.";
+    p.textContent = "Add cost data to unlock the Goal Planner -- map a Cost column in Transactions so real margin can be computed.";
     container.appendChild(p);
     return;
   }
-
-  const categories = Engine.categoryStats(ctx.txns);
-  const monthsInWindow = Math.max(1, ctx.revenueTrend.length);
-  const quarterUnitsScale = 3 / monthsInWindow;
 
   // Baseline for "next quarter": whichever Seasonality Source is active in
   // the Demand Forecast panel above (see computeSeasonalityBaseline) --
@@ -2347,6 +2395,29 @@ function renderGoalPlanner(container, ctx) {
   const baselineNote = `Baseline source: ${seasonalBaseline.sourceLabel} (set in the Demand Forecast panel above). ` +
     `Next-quarter total: ${fmtCr(baselineRevenueNextQ)}.`;
 
+  // Ad-spend lever's own baseline (quarterly spend + measured ROAS) -- the
+  // exact fixed logic the old, now-folded-in Ad-Spend Impact panel used:
+  // last 3 months of the Marketing Spend file's OWN calendar (never
+  // Transactions'), both sides run through normMonthKey() so a file using
+  // full dates ("2026-05-01") still matches Transactions' canonical
+  // "YYYY-MM" keys and revenue is never wrongly read as 0.
+  const adAvailable = ctx.mkt.length > 0;
+  let adBaselineSpend = 0, adBaselineRevenue = 0, adRoasBase = NaN, adWindowLabel = "", adLastQuarterMonths = [];
+  if (adAvailable) {
+    const mktMonths = Array.from(new Set(ctx.mkt.map(m => normMonthKey(m.month)))).sort();
+    adLastQuarterMonths = mktMonths.slice(-3);
+    adBaselineSpend = sum(ctx.mkt.filter(m => adLastQuarterMonths.includes(normMonthKey(m.month))), m => m.spend);
+    adBaselineRevenue = sum(ctx.revenueTrend.filter(r => adLastQuarterMonths.includes(normMonthKey(r.month))), r => r.netRevenue);
+    adWindowLabel = `your Marketing Spend file's last 3 months (${adLastQuarterMonths.join(", ")})`;
+    if (!(adBaselineSpend > 0)) {
+      adBaselineSpend = sum(ctx.mkt, m => m.spend);
+      adBaselineRevenue = ctx.netRevenue;
+      adWindowLabel = "your full loaded window (the recent quarter in your Marketing Spend file has no spend)";
+    }
+    adRoasBase = adBaselineSpend > 0 ? adBaselineRevenue / adBaselineSpend : NaN;
+  }
+  const adUsable = adAvailable && isFinite(adRoasBase);
+
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
   container.appendChild(wrap);
@@ -2356,7 +2427,7 @@ function renderGoalPlanner(container, ctx) {
   baselineP.textContent = baselineNote;
   wrap.appendChild(baselineP);
 
-  const inputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, mixCapPct: 15 };
+  const inputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: 0.5 };
 
   const inputsCard = document.createElement("div");
   inputsCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--page);";
@@ -2391,7 +2462,7 @@ function renderGoalPlanner(container, ctx) {
   inputsCard.appendChild(goalModeNote);
 
   const fieldsRow = document.createElement("div");
-  fieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;";
+  fieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;";
   inputsCard.appendChild(fieldsRow);
 
   const targetCol = fieldCol("Target growth, next quarter (%)");
@@ -2411,14 +2482,58 @@ function renderGoalPlanner(container, ctx) {
   priceCapCol.appendChild(provenanceNote("Assumption: assumes demand holds -- real price elasticity is not modeled.", true));
   fieldsRow.appendChild(priceCapCol);
 
-  const mixCapCol = fieldCol("Max % of units willing to shift");
-  const mixCapInput = document.createElement("input");
-  mixCapInput.type = "number"; mixCapInput.min = "0"; mixCapInput.step = "0.5"; mixCapInput.value = String(inputs.mixCapPct);
-  mixCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  mixCapInput.addEventListener("input", () => { inputs.mixCapPct = Math.max(0, Number(mixCapInput.value) || 0); recompute(); });
-  mixCapCol.appendChild(mixCapInput);
-  mixCapCol.appendChild(provenanceNote("Assumption: assumes shifted units sell through at the destination category's average price/margin.", true));
-  fieldsRow.appendChild(mixCapCol);
+  // Ad-spend lever, visually separated -- its own measured ROAS, its own
+  // cap, its own editable decline-rate assumption.
+  const adCard = document.createElement("div");
+  adCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px;background:var(--surface);";
+  inputsCard.appendChild(adCard);
+
+  const adHeading = document.createElement("div");
+  adHeading.style.cssText = "font-size:11px;font-weight:600;margin-bottom:8px;";
+  adHeading.textContent = "Ad-Spend Lever (whole-business)";
+  adCard.appendChild(adHeading);
+
+  if (!adUsable) {
+    const noAd = document.createElement("p");
+    noAd.className = "chart-caption"; noAd.style.margin = "0";
+    noAd.textContent = !adAvailable
+      ? "Add a Marketing Spend file (Month, Channel, Spend) to unlock this lever -- the price lever above still works without it."
+      : "No ad spend recorded in your data -- nothing to model from.";
+    adCard.appendChild(noAd);
+  } else {
+    const roasP = document.createElement("p");
+    roasP.style.cssText = "font-size:12px;margin:0 0 3px;color:var(--good);";
+    roasP.textContent = `Measured whole-business ROAS, ${adWindowLabel}: ${adRoasBase.toFixed(2)}x ` +
+      `(${fmtMoney0(adBaselineRevenue)} revenue / ${fmtMoney0(adBaselineSpend)} ad spend).`;
+    adCard.appendChild(roasP);
+    const blendP = document.createElement("p");
+    blendP.style.cssText = "font-size:10.5px;color:var(--ink-muted);margin:0 0 10px;";
+    blendP.textContent = "Whole-business, blended ratio -- doesn't separate out revenue that would have happened anyway (organic, repeat, offline).";
+    adCard.appendChild(blendP);
+  }
+
+  const adFieldsRow = document.createElement("div");
+  adFieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:12px;";
+  adCard.appendChild(adFieldsRow);
+
+  const adCapCol = fieldCol("Max ad-spend increase, %");
+  const adCapInput = document.createElement("input");
+  adCapInput.type = "number"; adCapInput.min = "0"; adCapInput.step = "0.5"; adCapInput.value = String(inputs.adSpendCapPct);
+  adCapInput.disabled = !adUsable;
+  adCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  adCapInput.addEventListener("input", () => { inputs.adSpendCapPct = Math.max(0, Number(adCapInput.value) || 0); recompute(); });
+  adCapCol.appendChild(adCapInput);
+  adFieldsRow.appendChild(adCapCol);
+
+  const declineCol = fieldCol("Diminishing-returns decline, %/pt");
+  const declineInput = document.createElement("input");
+  declineInput.type = "number"; declineInput.min = "0"; declineInput.max = "100"; declineInput.step = "0.1"; declineInput.value = String(inputs.declineRatePct);
+  declineInput.disabled = !adUsable;
+  declineInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  declineInput.addEventListener("input", () => { inputs.declineRatePct = Math.max(0, Number(declineInput.value) || 0); recompute(); });
+  declineCol.appendChild(declineInput);
+  declineCol.appendChild(provenanceNote("Assumption (editable): marginal ROAS falls by this % per extra 1 percentage point of spend -- never fitted to your data.", true));
+  adFieldsRow.appendChild(declineCol);
 
   const outputDiv = document.createElement("div");
   outputDiv.style.marginTop = "16px";
@@ -2427,13 +2542,14 @@ function renderGoalPlanner(container, ctx) {
   function recompute() {
     goalModeNote.textContent = inputs.goalType === "revenue"
       ? "Revenue mode: measured against your forecasted next-quarter revenue."
-      : `Profit mode: baseline profit = forecasted revenue × your MEASURED overall gross margin (${fmtPct1(ctx.marginPct)}), computed from your real cost data.`;
+      : `Profit mode: baseline profit = forecasted revenue × your MEASURED overall gross margin (${fmtPct1(ctx.marginPct)}), computed from your real cost data. The ad-spend lever nets its own extra spend out of profit.`;
 
     const result = computeGoalPaths({
       goalType: inputs.goalType, targetPct: inputs.targetPct,
       baselineRevenueNextQ, totalMarginPct: ctx.marginPct,
-      categories, quarterUnitsScale,
-      priceCapPct: inputs.priceCapPct, mixCapPct: inputs.mixCapPct,
+      priceCapPct: inputs.priceCapPct,
+      adSpendCapPct: inputs.adSpendCapPct, adAvailable: adUsable,
+      adBaselineSpend, adRoasBase, adDeclineRatePct: inputs.declineRatePct,
     });
 
     outputDiv.innerHTML = "";
@@ -2450,17 +2566,37 @@ function renderGoalPlanner(container, ctx) {
     tilesRow.appendChild(tile("Max reachable within your caps", (result.maxReachablePct >= 0 ? "+" : "") + result.maxReachablePct.toFixed(1) + "%", !result.reachable));
     outputDiv.appendChild(tilesRow);
 
-    if (!result.mixLever.available) {
-      const noMix = document.createElement("p");
-      noMix.className = "chart-caption";
-      noMix.textContent = result.mixLever.note;
-      outputDiv.appendChild(noMix);
+    if (!result.adLever.available && result.adLever.note) {
+      const noAdOut = document.createElement("p");
+      noAdOut.className = "chart-caption";
+      noAdOut.textContent = result.adLever.note;
+      outputDiv.appendChild(noAdOut);
+    }
+
+    // Diagnostic only -- NOT what any path recommends: what ad-driven
+    // profit would be if the FULL cap were spent with no optimization,
+    // ignoring where marginal profit turns negative. Paths themselves
+    // never propose this (a goal-seek should never recommend spend that
+    // hurts profit just because the cap allows it) -- this exists purely
+    // so the netting mechanism (and the fact that it CAN go negative at a
+    // high enough cap/decline combination) is visible and hand-checkable,
+    // not just asserted.
+    if (inputs.goalType === "profit" && adUsable && inputs.adSpendCapPct > 0) {
+      const rawCurve = computeAdSpendCurve(adBaselineSpend, adRoasBase, inputs.adSpendCapPct, inputs.declineRatePct, -Infinity);
+      const rawProfit = rawCurve.revenueRupees * ctx.marginPct - rawCurve.spendRupees;
+      const rawP = document.createElement("p");
+      rawP.style.cssText = `font-size:11px;margin:0 0 10px;color:${rawProfit < 0 ? "var(--critical)" : "var(--ink-muted)"};`;
+      rawP.textContent = `Diagnostic, not a recommendation: spending your FULL +${inputs.adSpendCapPct.toFixed(1)}% ad-spend cap with no ` +
+        `optimization would net ${fmtMoney0(rawProfit)} in ad-driven profit (${fmtMoney0(rawCurve.revenueRupees)} revenue − ` +
+        `${fmtMoney0(rawCurve.spendRupees)} spend) -- ${rawProfit < 0 ? "already negative" : "still positive"} at this decline rate. ` +
+        `Paths below never spend past where this turns negative.`;
+      outputDiv.appendChild(rawP);
     }
 
     if (!result.reachable) {
       const failBox = document.createElement("div");
       failBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:14px;background:#fff6ea;font-size:13px;line-height:1.5;";
-      const bindingName = result.bindingLimit === "mix" ? "the product-mix cap" : "the price cap";
+      const bindingName = result.bindingLimit === "ad" ? "the ad-spend cap" : "the price cap";
       failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
         `The most you can reach next quarter is <strong>+${result.maxReachablePct.toFixed(1)}%</strong>, using both levers ` +
         `fully -- short of your <strong>+${inputs.targetPct.toFixed(1)}%</strong> target. ` +
@@ -2470,350 +2606,36 @@ function renderGoalPlanner(container, ctx) {
       return;
     }
 
+    if (result.adLever.available && result.adSearchCapPct < inputs.adSpendCapPct - 1e-6) {
+      const ceilNote = document.createElement("p");
+      ceilNote.style.cssText = "font-size:11px;color:#8a5a00;margin:0 0 10px;";
+      ceilNote.textContent = inputs.goalType === "revenue"
+        ? `Note: beyond +${result.adSearchCapPct.toFixed(1)}% ad spend, extra spend stops growing revenue at this decline rate -- paths below never use more than that.`
+        : `Note: beyond +${result.adSearchCapPct.toFixed(1)}% ad spend, extra spend stops paying for itself in PROFIT terms at this decline rate (even if revenue would still grow) -- paths below never use more than that.`;
+      outputDiv.appendChild(ceilNote);
+    }
+
     const rows = result.paths.map(pth => `
       <tr>
         <td>${pth.name}</td>
         <td class="num">${pth.priceUsedPct.toFixed(1)}%</td>
-        <td class="num">${commas(Math.round(pth.unitsShifted))} units${result.mixLever.available ? ` (${result.mixLever.donor} → ${result.mixLever.recipient})` : ""}</td>
+        <td class="num">${pth.adUsedPct.toFixed(1)}%${result.adLever.available && pth.adUsedPct > 0 ? ` (${fmtMoney0(pth.adSpendRupees)})` : ""}</td>
         <td class="num" style="background:#eafaf0;">${(pth.achievedPct >= 0 ? "+" : "") + pth.achievedPct.toFixed(1)}%</td>
         <td class="num" style="background:#eafaf0;">${fmtMoney0(pth.achievedRupees)}</td>
       </tr>`).join("");
     const table = document.createElement("table");
     table.className = "data-table";
-    table.innerHTML = `<thead><tr><th>Path</th><th>Price increase used (≤ cap)</th><th>Units shifted (≤ cap)</th>` +
+    table.innerHTML = `<thead><tr><th>Path</th><th>Price increase used (≤ cap)</th><th>Ad-spend increase used (≤ cap)</th>` +
       `<th>Achieved growth %</th><th>Achieved ₹</th></tr></thead><tbody>${rows}</tbody>`;
     outputDiv.appendChild(table);
 
     const note = document.createElement("p");
     note.className = "chart-caption";
     note.style.marginTop = "10px";
-    note.textContent = "\"Price increase used\" and \"Units shifted\" are each path's lever moves, never exceeding the caps you set above. " +
-      "\"Achieved\" columns are recomputed independently from those exact moves, not assumed equal to your target. Per-category revenue, " +
-      "cost, and margin are all measured from your real data; the price and mix levers are scenarios you're choosing to explore, not predictions.";
-    outputDiv.appendChild(note);
-  }
-
-  recompute();
-}
-
-// Ad-Spend Impact -- a WHAT-IF (never a search/goal-seek), whole-business
-// (not per-SKU), entirely separate from the Goal Planner above. The CEO
-// types "change total ad spend by X%" (positive or negative); this reports
-// the revenue AND profit impact of that exact scenario.
-//
-// Gated ONLY on a Marketing Spend file being loaded (Month, Channel, Spend)
-// -- deliberately NOT on Transactions having a mapped Marketing Channel
-// column. ROAS here is a WHOLE-BUSINESS ratio: total company revenue
-// (from Transactions, every row, channel or no channel) divided by total
-// ad spend across every row of the Marketing Spend file, both over the
-// last 3 calendar months actually present in the data (a measured
-// "current run-rate," not a forecast). This is a deliberate simplification
-// from a per-channel ROAS: it needs nothing more than the one Marketing
-// Spend file to work, at the cost of blending in whatever organic/offline
-// revenue isn't attributable to that spend -- labeled as such below.
-//
-// Diminishing returns: extra spend is modeled in 1-percentage-point-of-
-// baseline-spend increments; each increment's MARGINAL ROAS decays
-// geometrically from the measured base by an EDITABLE decline rate per
-// increment (never a flat conversion). For an INCREASE, if marginal ROAS
-// decays to <=1x before the requested change is fully applied, the model
-// stops spending right there -- "beyond +Z% spend, extra spend loses
-// money" -- rather than pretending every rupee up to X% is worth spending.
-// For a CUT (negative X%), there's no such ceiling to hit (existing spend
-// isn't assumed unprofitable just because MORE would be) -- a cut is
-// modeled as the mirror image of the equivalent increase, applied in full
-// across the requested magnitude, using the same measured ROAS and decay
-// curve. That symmetry is a simplification, stated plainly in the UI
-// rather than presented as a separately-fitted "cut" model.
-//
-// PROFIT is mandatory and separate from revenue: extra profit = extra
-// revenue x the MEASURED overall gross margin, MINUS the extra ad spend
-// (this formula is sign-agnostic, so it works unchanged for a cut too --
-// a negative "extra spend" is cash saved, which adds back into profit).
-// Because margin is < 100%, profit turns negative at a lower spend
-// increase than revenue does (revenue only stops growing once marginal
-// ROAS hits 1x; profit already stopped paying for itself once marginal
-// ROAS fell below 1/marginPct) -- this is reported as-is, not hidden,
-// precisely because "revenue still rising" and "profit already falling"
-// can both be true at the same time.
-function computeAdSpendImpact(p) {
-  // p: totalAdSpendBaseline, totalRevenueBaseline, roasBase, spendChangePct (signed), declineRatePct, marginPct (NaN if cost isn't mapped)
-  const stepRupees = p.totalAdSpendBaseline / 100; // rupees per 1 percentage point of baseline spend
-  const sign = p.spendChangePct < 0 ? -1 : 1;
-  const magnitudePct = Math.abs(p.spendChangePct);
-  const fullSteps = Math.floor(magnitudePct);
-  const remainderPct = magnitudePct - fullSteps;
-  const curve = [];
-  let cumulativeSpend = 0, cumulativeRevenue = 0, stoppedEarly = false, stopAtPct = null;
-
-  // enforceCeiling only applies for an INCREASE (sign > 0) -- see comment above.
-  function applyStep(pct, decaySteps, enforceCeiling) {
-    const marginalRoas = p.roasBase * Math.pow(1 - p.declineRatePct / 100, decaySteps);
-    if (enforceCeiling && marginalRoas <= 1) return false; // this increment loses money on pure revenue terms already
-    const spendThisStep = stepRupees * pct;
-    const revenueThisStep = spendThisStep * marginalRoas;
-    cumulativeSpend += spendThisStep;
-    cumulativeRevenue += revenueThisStep;
-    const atPct = (curve.length ? curve[curve.length - 1].atPct : 0) + pct;
-    curve.push({ atPct, marginalRoas, cumulativeSpend, cumulativeRevenue });
-    return true;
-  }
-
-  for (let i = 0; i < fullSteps; i++) {
-    if (!applyStep(1, i, sign > 0)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); break; }
-  }
-  if (!stoppedEarly && remainderPct > 1e-9) {
-    if (!applyStep(remainderPct, fullSteps, sign > 0)) { stoppedEarly = true; stopAtPct = cumulativeSpend / (stepRupees || 1); }
-  }
-
-  const spendUsed = sign * cumulativeSpend;
-  const revenueGained = sign * cumulativeRevenue;
-  const revenueGrowthPct = p.totalRevenueBaseline ? (revenueGained / p.totalRevenueBaseline) * 100 : 0;
-
-  let profitGained = null, profitGrowthPct = null, profitBaseline = null;
-  if (isFinite(p.marginPct)) {
-    profitGained = revenueGained * p.marginPct - spendUsed; // mandatory: subtract the extra spend (sign-agnostic)
-    profitBaseline = p.totalRevenueBaseline * p.marginPct;
-    profitGrowthPct = profitBaseline ? (profitGained / profitBaseline) * 100 : 0;
-  }
-
-  return {
-    spendChangePct: p.spendChangePct, curve, stoppedEarly, stopAtPct,
-    spendUsed, revenueGained, revenueGrowthPct,
-    profitGained, profitGrowthPct, profitBaseline,
-  };
-}
-
-function renderAdSpendImpact(container, ctx) {
-  const { cov } = ctx;
-  panelHeader(container, "Ad-Spend Impact (Whole-Business)");
-
-  // Gated ONLY on a Marketing Spend file being loaded -- no Transactions
-  // channel mapping required. ctx.mkt is populated once Month is present
-  // and both Channel + Spend are mapped IN THAT FILE (its own schema);
-  // Transactions' own "channel" role plays no part in this gate.
-  if (!ctx.mkt.length) {
-    const p = document.createElement("p");
-    p.className = "chart-caption"; p.style.margin = "4px 0";
-    p.textContent = "Add a Marketing Spend file (Month, Channel, Spend) to unlock Ad-Spend Impact -- it needs a " +
-      "real measured ROAS to work from. No Marketing Channel column is required in Transactions.";
-    container.appendChild(p);
-    return;
-  }
-
-  // The recent quarter is defined by the Marketing Spend FILE's own last 3
-  // distinct months -- not the Transactions file's last 3 months. Those two
-  // files can easily cover different date ranges (this panel doesn't even
-  // require them to share a channel column), and slicing by Transactions'
-  // calendar was the bug: it could produce a window with real Marketing
-  // Spend rows sitting entirely outside it, leaving the dollar-figure
-  // baseline stuck at 0 even though a full-window ROAS still looked fine.
-  // totalAdSpendBaseline and totalRevenueBaseline are the ONE canonical
-  // baseline pair -- used for BOTH the measured ROAS ratio below AND every
-  // dollar figure computeAdSpendImpact() produces, so the two can never
-  // disagree the way they did before this fix.
-  // Both sides are run through normMonthKey() here even though buildMarketing()
-  // already normalizes m.month at the source -- comparing two ALREADY-normalized
-  // keys is a harmless no-op, and it means this comparison can't silently break
-  // again if that upstream normalization ever changes.
-  const mktMonths = Array.from(new Set(ctx.mkt.map(m => normMonthKey(m.month)))).sort();
-  const lastQuarterMonths = mktMonths.slice(-3);
-  let totalAdSpendBaseline = sum(ctx.mkt.filter(m => lastQuarterMonths.includes(normMonthKey(m.month))), m => m.spend);
-  let totalRevenueBaseline = sum(ctx.revenueTrend.filter(r => lastQuarterMonths.includes(normMonthKey(r.month))), r => r.netRevenue);
-  let roasWindowLabel = `your Marketing Spend file's last 3 months (${lastQuarterMonths.join(", ")})`;
-  // Fall back to the full loaded window ONLY if the recent quarter genuinely
-  // has zero spend rows -- never silently for a mere month-label mismatch.
-  if (!(totalAdSpendBaseline > 0)) {
-    totalAdSpendBaseline = sum(ctx.mkt, m => m.spend);
-    totalRevenueBaseline = ctx.netRevenue;
-    roasWindowLabel = "your full loaded window (the recent quarter in your Marketing Spend file has no spend)";
-  }
-  const roasBase = totalAdSpendBaseline > 0 ? totalRevenueBaseline / totalAdSpendBaseline : NaN;
-
-  const wrap = document.createElement("div");
-  wrap.style.marginTop = "6px";
-  container.appendChild(wrap);
-
-  // Default decline rate (0.5%/pt) is deliberately gentle -- informed by a
-  // real observation (a 63% ad-spend jump saw marginal ROAS fall to ~1.85x
-  // from a ~2.5x base, implying a slow per-point decay), NOT fit
-  // automatically from any file this page loads. Still fully editable.
-  const inputs = { spendChangePct: 15, declineRatePct: 0.5 };
-
-  const inputsCard = document.createElement("div");
-  inputsCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--page);";
-  wrap.appendChild(inputsCard);
-
-  const inputsHeading = document.createElement("div");
-  inputsHeading.style.cssText = "font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--ink-muted);margin-bottom:8px;";
-  inputsHeading.textContent = "Inputs -- your ad-spend scenario (whole-business, not per-product)";
-  inputsCard.appendChild(inputsHeading);
-
-  const fieldsRow = document.createElement("div");
-  fieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:12px;";
-  inputsCard.appendChild(fieldsRow);
-
-  const spendCol = fieldCol("Change total ad spend by, % (+ or −)");
-  const spendInput = document.createElement("input");
-  spendInput.type = "number"; spendInput.step = "1"; spendInput.value = String(inputs.spendChangePct);
-  spendInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  spendInput.addEventListener("input", () => { inputs.spendChangePct = Number(spendInput.value) || 0; recompute(); });
-  spendCol.appendChild(spendInput);
-  fieldsRow.appendChild(spendCol);
-
-  const declineCol = fieldCol("Diminishing-returns decline, %/pt");
-  const declineInput = document.createElement("input");
-  declineInput.type = "number"; declineInput.min = "0"; declineInput.max = "100"; declineInput.step = "0.1"; declineInput.value = String(inputs.declineRatePct);
-  declineInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  declineInput.addEventListener("input", () => { inputs.declineRatePct = Math.max(0, Number(declineInput.value) || 0); recompute(); });
-  declineCol.appendChild(declineInput);
-  declineCol.appendChild(provenanceNote("Assumed diminishing-returns rate (editable): marginal ROAS falls by this % per extra 1 percentage point of spend.", true));
-  fieldsRow.appendChild(declineCol);
-
-  const outputDiv = document.createElement("div");
-  outputDiv.style.marginTop = "16px";
-  wrap.appendChild(outputDiv);
-
-  function recompute() {
-    outputDiv.innerHTML = "";
-
-    const roasNote = document.createElement("p");
-    roasNote.style.cssText = `font-size:12px;margin:0 0 4px;color:${isFinite(roasBase) ? "var(--good)" : "#8a5a00"};`;
-    roasNote.textContent = isFinite(roasBase)
-      ? `Measured whole-business ROAS, ${roasWindowLabel}: ${roasBase.toFixed(2)}x ` +
-        `(${fmtMoney0(totalRevenueBaseline)} total revenue / ${fmtMoney0(totalAdSpendBaseline)} total ad spend).`
-      : "No ad spend recorded in your data -- nothing to model impact from.";
-    outputDiv.appendChild(roasNote);
-
-    const baselineSpendNote = document.createElement("p");
-    baselineSpendNote.style.cssText = "font-size:11.5px;color:var(--ink-secondary);margin:0 0 4px;";
-    baselineSpendNote.textContent = `Baseline quarterly ad spend used below: ${fmtMoney0(totalAdSpendBaseline)} ` +
-      `(sum of Spend across ${lastQuarterMonths.length} month${lastQuarterMonths.length === 1 ? "" : "s"} of your Marketing Spend file` +
-      (roasWindowLabel.startsWith("your Marketing Spend file's") ? ` -- ${lastQuarterMonths.join(", ")}` : ", full window") + ").";
-    outputDiv.appendChild(baselineSpendNote);
-
-    if (isFinite(roasBase)) {
-      const blendNote = document.createElement("p");
-      blendNote.style.cssText = "font-size:11px;color:var(--ink-muted);margin:0 0 4px;";
-      blendNote.textContent = "This is a whole-business, blended ratio (total revenue ÷ total ad spend) -- it doesn't separate out " +
-        "revenue that would have happened anyway (organic, repeat, offline), so it can overstate what THIS spend alone is driving. " +
-        "A single month's ROAS can also be distorted by seasonality (a launch, a big sale) -- treat this as indicative of typical " +
-        "returns, not an exact, seasonality-adjusted figure.";
-      outputDiv.appendChild(blendNote);
-    }
-
-    if (!isFinite(roasBase)) {
-      return;
-    }
-
-    const result = computeAdSpendImpact({
-      totalAdSpendBaseline, totalRevenueBaseline, roasBase,
-      spendChangePct: inputs.spendChangePct, declineRatePct: inputs.declineRatePct,
-      marginPct: cov.cost ? ctx.marginPct : NaN,
-    });
-
-    const dir = inputs.spendChangePct >= 0 ? "Increasing" : "Cutting";
-    const headline = document.createElement("p");
-    headline.style.cssText = "font-size:14px;font-weight:600;margin:12px 0 12px;";
-    headline.textContent = `${dir} ad spend by ${inputs.spendChangePct >= 0 ? "+" : ""}${inputs.spendChangePct.toFixed(1)}% would generate about ` +
-      `${result.revenueGrowthPct >= 0 ? "+" : ""}${result.revenueGrowthPct.toFixed(1)}% revenue change` +
-      (result.profitGrowthPct != null
-        ? ` and about ${result.profitGrowthPct >= 0 ? "+" : ""}${result.profitGrowthPct.toFixed(1)}% profit change.`
-        : " (add cost data to see the profit impact).");
-    outputDiv.appendChild(headline);
-
-    if (result.stoppedEarly) {
-      const stopBox = document.createElement("div");
-      stopBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:12px 14px;background:#fff6ea;font-size:13px;margin-bottom:14px;";
-      stopBox.innerHTML = `<strong>Honest ceiling reached.</strong> Beyond +${result.stopAtPct.toFixed(1)}% spend, extra spend loses ` +
-        `money at this decline rate (marginal ROAS would drop to 1x or below) -- so this model only spends up to there, not your full ` +
-        `+${inputs.spendChangePct.toFixed(1)}% request.`;
-      outputDiv.appendChild(stopBox);
-    } else if (inputs.spendChangePct < 0) {
-      const cutNote = document.createElement("p");
-      cutNote.style.cssText = "font-size:11px;color:var(--ink-muted);margin:0 0 14px;";
-      cutNote.textContent = "Modeling a cut: this mirrors the equivalent increase using the same measured ROAS and decay curve, " +
-        "applied across the full requested %, rather than a separately-fitted \"what happens when you cut\" model.";
-      outputDiv.appendChild(cutNote);
-    }
-
-    // Revenue Impact -- kept visually separate from Profit Impact below,
-    // since the two are genuinely different numbers.
-    const revHeading = document.createElement("div");
-    revHeading.style.cssText = "font-size:12px;font-weight:600;margin:4px 0 8px;";
-    revHeading.textContent = "Revenue Impact";
-    outputDiv.appendChild(revHeading);
-    const revTiles = document.createElement("div");
-    revTiles.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;";
-    revTiles.appendChild(tile("Ad spend change", fmtMoney0(result.spendUsed)));
-    revTiles.appendChild(tile("Revenue change", fmtMoney0(result.revenueGained), result.revenueGained < 0));
-    revTiles.appendChild(tile("Revenue growth vs. baseline", (result.revenueGrowthPct >= 0 ? "+" : "") + result.revenueGrowthPct.toFixed(1) + "%", result.revenueGrowthPct < 0));
-    outputDiv.appendChild(revTiles);
-
-    // Profit Impact -- mandatory subtraction of the extra ad spend. Gated
-    // on Cost being mapped (needs a real measured margin %); Revenue
-    // Impact above still works without it.
-    const profitHeading = document.createElement("div");
-    profitHeading.style.cssText = "font-size:12px;font-weight:600;margin:4px 0 8px;";
-    profitHeading.textContent = "Profit Impact";
-    outputDiv.appendChild(profitHeading);
-    if (result.profitGained == null) {
-      const noProfit = document.createElement("p");
-      noProfit.className = "chart-caption";
-      noProfit.textContent = "Add cost data (map a Cost column in Transactions) to compute Profit Impact -- Revenue Impact above doesn't need it.";
-      outputDiv.appendChild(noProfit);
-    } else {
-      const profitTiles = document.createElement("div");
-      profitTiles.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:6px;";
-      profitTiles.appendChild(tile("Ad spend change", fmtMoney0(result.spendUsed)));
-      profitTiles.appendChild(tile("Profit change", fmtMoney0(result.profitGained), result.profitGained < 0));
-      profitTiles.appendChild(tile("Profit growth vs. baseline", (result.profitGrowthPct >= 0 ? "+" : "") + result.profitGrowthPct.toFixed(1) + "%", result.profitGrowthPct < 0));
-      outputDiv.appendChild(profitTiles);
-      const formulaNote = document.createElement("p");
-      formulaNote.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 14px;";
-      formulaNote.textContent = `Profit change = revenue change × your measured overall gross margin (${fmtPct1(ctx.marginPct)}) − ad spend change. ` +
-        `Netting out the spend change is mandatory -- revenue lift and profit lift are different numbers, and profit can turn negative before ` +
-        `revenue does (a margin under 100% means the profit break-even ROAS is higher than the 1x revenue break-even).`;
-      outputDiv.appendChild(formulaNote);
-    }
-
-    // The marginal-ROAS curve -- the whole point of this panel: show
-    // returns diminishing, don't just assert it.
-    if (result.curve.length) {
-      const curveHeading = document.createElement("div");
-      curveHeading.style.cssText = "font-size:12px;font-weight:600;margin:8px 0 6px;";
-      curveHeading.textContent = inputs.spendChangePct >= 0 ? "Marginal ROAS as spend rises" : "Marginal ROAS across the spend being cut";
-      outputDiv.appendChild(curveHeading);
-
-      // Thin the curve for the x-axis when there are many 1pp steps, so
-      // labels stay legible -- the underlying math above is still computed
-      // at full 1pp resolution regardless of how many points are plotted.
-      // curve.atPct is always a positive magnitude; the sign shown here
-      // matches the direction the CEO actually asked for (a cut labels as
-      // "-1%, -2%, ..." even though the underlying math mirrors an increase).
-      const dirSign = inputs.spendChangePct >= 0 ? "+" : "-";
-      const maxLabels = 24;
-      const stride = Math.max(1, Math.ceil(result.curve.length / maxLabels));
-      const plotted = result.curve.filter((c, i) => i % stride === 0 || i === result.curve.length - 1);
-      const cats = plotted.map(c => dirSign + c.atPct.toFixed(c.atPct % 1 === 0 ? 0 : 1) + "%");
-      const vals = plotted.map(c => c.marginalRoas);
-      const svg = makeSvg(200);
-      outputDiv.appendChild(svg);
-      const frame = drawVFrame(svg, { yMin: Math.min(1, ...vals) * 0.9, yMax: Math.max(...vals, 1) * 1.1, yFormat: v => v.toFixed(1) + "x", xCategories: cats, xRotate: true });
-      drawLine(svg, frame, cats, vals, COLORS.categorical[0]);
-      // A y=1 reference line: below it, extra spend no longer pays for itself.
-      const yAt1 = frame.yScale(1);
-      svg.appendChild(se("line", { x1: frame.x0, x2: frame.x1, y1: yAt1, y2: yAt1, stroke: COLORS.status.critical, "stroke-width": 1, "stroke-dasharray": "4 3" }));
-      svg.appendChild(text(frame.x1 - 4, yAt1 - 4, "1x -- breakeven", "tick-label", { "text-anchor": "end", fill: COLORS.status.critical }));
-    }
-
-    const note = document.createElement("p");
-    note.className = "chart-caption";
-    note.style.marginTop = "10px";
-    note.textContent = `Baseline (last quarter, measured): ${fmtMoney0(totalRevenueBaseline)} total company revenue, ` +
-      `${fmtMoney0(totalAdSpendBaseline)} total ad spend across every channel in your Marketing Spend file. This is a whole-business ` +
-      `panel, not per-product -- it needs only that one file, not a Marketing Channel column in Transactions. The decline rate is your ` +
-      `editable assumption, never derived by fitting a curve to history.`;
+    note.textContent = "\"Price increase used\" and \"Ad-spend increase used\" are each path's lever moves, never exceeding the caps you set " +
+      "above. \"Achieved\" columns are recomputed independently from those exact moves (including the ad lever's diminishing returns), not " +
+      "assumed equal to your target. Price is a scenario that assumes demand holds; the ad-spend lever's ROAS is measured but whole-business " +
+      "blended, and its decline rate is an editable assumption, never fitted to your data.";
     outputDiv.appendChild(note);
   }
 
@@ -3287,7 +3109,7 @@ function renderAll(state) {
     // exactly what to map. Just clear every panel and stop.
     perfSection.style.display = "none";
     document.getElementById("exec-summary").innerHTML = "";
-    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast", "sec-goal-planner", "sec-ad-impact", "sec-sensitivity"].forEach(id => {
+    ["sec-returns", "sec-items", "sec-alerts", "sec-channel-wrap", "sec-cohort-wrap", "sec-inventory", "sec-forecast", "sec-goal-planner", "sec-sensitivity"].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = "none";
     });
     renderEditableTable(state);
@@ -3334,18 +3156,11 @@ function renderAll(state) {
 
   // Goal Planner is always attempted once cov.core holds too --
   // renderGoalPlanner() itself shows the disabled state inline when Cost
-  // isn't mapped (it needs real per-category margin to work from).
+  // isn't mapped (it needs real margin to work from). Its ad-spend lever
+  // additionally needs a Marketing Spend file and degrades on its own if
+  // that isn't loaded, while the price lever still works.
   document.getElementById("sec-goal-planner").style.display = "";
   renderGoalPlanner(document.getElementById("panel-goal-planner"), ctx);
-
-  // Ad-Spend Impact is always attempted once cov.core holds too --
-  // renderAdSpendImpact() itself shows the disabled state inline when no
-  // Marketing Spend file + channel mapping is loaded (same gate as Channel
-  // Economics: cov.marketing). It is a separate, whole-business panel from
-  // the per-category Goal Planner above -- its own inputs/state, never
-  // merged with Goal Planner's levers.
-  document.getElementById("sec-ad-impact").style.display = "";
-  renderAdSpendImpact(document.getElementById("panel-ad-impact"), ctx);
 
   // Sensitivity is always attempted once cov.core holds too -- renderSensitivity()
   // itself shows the Tier 1 disabled state inline when Cost isn't mapped.

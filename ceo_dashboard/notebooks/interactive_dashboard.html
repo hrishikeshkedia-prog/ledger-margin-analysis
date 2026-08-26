@@ -2454,6 +2454,26 @@ function renderGoalPlanner(container, ctx) {
   }
   const adUsable = adAvailable && isFinite(adRoasBase);
 
+  // Production Plan prep -- per-SKU units, computed ONCE here (doesn't
+  // depend on the Inputs card below), from the recent quarter of the
+  // TRANSACTIONS file's own calendar (never the Marketing Spend file's --
+  // that's the ad lever's window, this is the units-production window).
+  // Requires genuine SKU + Quantity mapping: without Quantity, "units"
+  // would silently default to 1-per-row (order-line count), so this is
+  // gated the same way the Demand Forecast panel gates its own units
+  // series (see computeContext's cov.quantity comment above).
+  const productionPlanAvailable = cov.sku && cov.quantity;
+  let recentQuarterMonths = [], skuRowsRecent = [], blendedASP = NaN, totalCurrentUnits = 0, totalCurrentRevenue = 0;
+  if (productionPlanAvailable) {
+    const txnMonths = Array.from(new Set(ctx.txns.map(t => t.month))).sort();
+    recentQuarterMonths = txnMonths.slice(-3);
+    const recentQtrTxns = ctx.txns.filter(t => recentQuarterMonths.includes(t.month));
+    skuRowsRecent = Engine.marginBySku(recentQtrTxns).filter(r => r.unitsSold > 0);
+    totalCurrentUnits = sum(skuRowsRecent, r => r.unitsSold);
+    totalCurrentRevenue = sum(skuRowsRecent, r => r.netRevenue);
+    blendedASP = totalCurrentUnits > 0 ? totalCurrentRevenue / totalCurrentUnits : NaN;
+  }
+
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
   container.appendChild(wrap);
@@ -2834,6 +2854,117 @@ function renderGoalPlanner(container, ctx) {
       "sum exactly to that path's quarter figures above (baselines sum to the quarter's total forecast revenue). \"Achieved profit\" reads " +
       "\"–\" when Cost isn't mapped, same as the quarter total.";
     outputDiv.appendChild(monthlyNote);
+
+    // Production Plan -- per-SKU units to produce next quarter, driven
+    // ONLY by the ad-spend lever's revenue growth. The price lever raises
+    // revenue on the SAME units sold ("assumes demand holds"), so it
+    // needs zero extra production by design -- a path that hits its
+    // target purely by price correctly shows zero extra units below, not
+    // as a bug. Ties to the SAME path the Monthly Stack chart above is
+    // showing (the pathSelect dropdown), so switching path updates both.
+    const planHeading = document.createElement("div");
+    planHeading.style.cssText = "font-size:12px;font-weight:600;margin:18px 0 4px;";
+    planHeading.textContent = "Production Plan";
+    outputDiv.appendChild(planHeading);
+
+    if (!productionPlanAvailable) {
+      const planGate = document.createElement("p");
+      planGate.className = "chart-caption";
+      planGate.textContent = "Add SKU and Quantity columns in Transactions to unlock the Production Plan -- real per-SKU unit counts are " +
+        "needed, never approximated from order-line counts.";
+      outputDiv.appendChild(planGate);
+    } else {
+      const planSub = document.createElement("p");
+      planSub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;";
+      planSub.textContent = `Only the ad-spend lever needs extra units -- it sells more. The price lever's growth is the same units at a ` +
+        `higher price, so it needs none. Extra units = the selected path's ad-driven revenue increase ÷ your blended average selling ` +
+        `price (${fmtMoney0(blendedASP)}, from ${fmtMoney0(totalCurrentRevenue)} revenue over ${commas(Math.round(totalCurrentUnits))} units ` +
+        `in your most recent quarter, ${recentQuarterMonths.map(monthName).join("/")}). Current units below are that same recent quarter, ` +
+        `per SKU.`;
+      outputDiv.appendChild(planSub);
+
+      const planControls = document.createElement("div");
+      planControls.style.cssText = "display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px;";
+      const splitLabel = document.createElement("span");
+      splitLabel.style.cssText = "font-size:12px;color:var(--ink-muted);";
+      splitLabel.textContent = "Split extra units:";
+      planControls.appendChild(splitLabel);
+      const splitOptions = [["mix", "By current sales mix"], ["even", "Even (equal % growth)"]];
+      const splitRadios = [];
+      splitOptions.forEach(([val, label]) => {
+        const lab = document.createElement("label");
+        lab.style.cssText = "font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;";
+        const radio = document.createElement("input");
+        radio.type = "radio"; radio.name = "prod-split-radio"; radio.value = val;
+        radio.checked = val === "mix";
+        radio.addEventListener("change", () => { if (radio.checked) drawProductionPlan(pathSelect.value, val); });
+        lab.appendChild(radio);
+        lab.appendChild(document.createTextNode(label));
+        planControls.appendChild(lab);
+        splitRadios.push(radio);
+      });
+      outputDiv.appendChild(planControls);
+
+      const planTotalLine = document.createElement("p");
+      planTotalLine.style.cssText = "font-size:13px;font-weight:600;margin:0 0 8px;";
+      outputDiv.appendChild(planTotalLine);
+
+      const planZeroNote = document.createElement("p");
+      planZeroNote.className = "chart-caption";
+      planZeroNote.style.cssText = "color:#8a5a00;margin:0 0 8px;display:none;";
+      outputDiv.appendChild(planZeroNote);
+
+      const planTable = document.createElement("table");
+      planTable.className = "data-table";
+      planTable.style.fontSize = "12px";
+      outputDiv.appendChild(planTable);
+
+      function drawProductionPlan(pathName, method) {
+        const pth = result.paths.find(p => p.name === pathName) || result.paths[0];
+        const adDrivenIncrease = Math.max(0, pth.adRevContribution || 0);
+        const totalExtraUnits = blendedASP > 0 ? adDrivenIncrease / blendedASP : 0;
+
+        planTotalLine.textContent = `Total extra units to produce (${pathName} path): ${commas(Math.round(totalExtraUnits))}`;
+
+        if (totalExtraUnits <= 0) {
+          planZeroNote.style.display = "";
+          planZeroNote.textContent = "The selected path's ad-spend lever isn't driving any revenue growth (0% ad-spend increase used, or no " +
+            "ad-spend cap set), so no extra production is needed -- every SKU stays at its current recent-quarter units.";
+        } else {
+          planZeroNote.style.display = "none";
+        }
+
+        const rows = skuRowsRecent.map(r => {
+          const mixShare = totalCurrentRevenue > 0 ? r.netRevenue / totalCurrentRevenue : 0;
+          const unitShare = totalCurrentUnits > 0 ? r.unitsSold / totalCurrentUnits : 0;
+          const extra = totalExtraUnits * (method === "mix" ? mixShare : unitShare);
+          const newTotal = r.unitsSold + extra;
+          const pctIncrease = r.unitsSold > 0 ? extra / r.unitsSold : 0;
+          return { sku: r.sku, currentUnits: r.unitsSold, extra, newTotal, pctIncrease };
+        }).sort((a, b) => b.currentUnits - a.currentUnits);
+
+        const bodyRows = rows.map(r => `
+          <tr>
+            <td>${r.sku}</td>
+            <td class="num">${commas(Math.round(r.currentUnits))}</td>
+            <td class="num">${commas(Math.round(r.extra))}</td>
+            <td class="num" style="background:#eafaf0;">${commas(Math.round(r.newTotal))}</td>
+            <td class="num">${fmtPct1(r.pctIncrease)}</td>
+          </tr>`);
+        planTable.innerHTML = `<thead><tr><th>SKU</th><th>Current units (recent quarter)</th><th>Extra units to produce</th>` +
+          `<th>New total units</th><th>% increase</th></tr></thead><tbody>${bodyRows.join("")}</tbody>`;
+      }
+      drawProductionPlan(pathSelect.value, "mix");
+      pathSelect.addEventListener("change", () => drawProductionPlan(pathSelect.value, splitRadios.find(r => r.checked).value));
+
+      const planNote = document.createElement("p");
+      planNote.className = "chart-caption";
+      planNote.style.marginTop = "8px";
+      planNote.textContent = "Both split methods always add up to the same total extra units above -- only how those units are spread across " +
+        "SKUs differs. \"By current sales mix\" weights each SKU by its share of current REVENUE (so higher-priced or higher-selling items " +
+        "absorb more of the increase); \"Even\" applies the same % growth to every SKU's own current units instead.";
+      outputDiv.appendChild(planNote);
+    }
   }
 
   recompute();

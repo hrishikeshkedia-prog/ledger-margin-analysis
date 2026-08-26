@@ -1886,6 +1886,54 @@ function refreshSeasonalityDependents() {
   if (gPanel && lastRenderedCtx.cov.cost) renderGoalPlanner(gPanel, lastRenderedCtx);
 }
 
+// External Cost Sensitivity's own factor rows, hoisted to page level (same
+// pattern as goalPlannerInputs above) so the Goal Planner's Macro Stress
+// Test can read the CEO's current scenario -- built fresh once per
+// renderAll() (see the call site there), same "fresh every dataset" timing
+// the Sensitivity panel always had, just built early enough that Goal
+// Planner (which renders before Sensitivity in renderAll()) sees it too.
+let sensitivityRows = null;
+function makeSensitivityRow(label, exposure, exposureSource, driver, passThroughMid, passThroughSource, linked, range, rationale, macroSeries) {
+  return {
+    label, exposure, exposureSource, move: 5,
+    passThrough: passThroughMid, passThroughSource, driver, linked,
+    passThroughRange: range || null, rationale: rationale || null, macroSeries: macroSeries || [],
+  };
+}
+function buildSensitivityRows(ctx) {
+  const hasBreakdown = ctx.cov.costBreakdown && ctx.costBreakdown && ctx.costBreakdown.length > 0;
+  return hasBreakdown
+    ? ctx.costBreakdown.map(r => {
+        const match = matchCommodityLinkage(r.inputType);
+        const exposure = Math.max(0, Math.min(100, r.pctOfCost));
+        return match
+          ? makeSensitivityRow(r.inputType, exposure, "measured", match.driver, match.passThrough.mid, "library", true, match.passThrough, match.rationale, match.macroSeries)
+          : makeSensitivityRow(r.inputType, exposure, "measured", null, 1, "manual", false);
+      })
+    : [makeSensitivityRow("USD", 0, "manual", null, 1, "manual", false)];
+}
+// The SAME combined-cost-shock % External Cost Sensitivity's own recompute()
+// shows (costChange / totalCost) -- expressed as a fraction here since it's
+// independent of any one panel's totalCost: sum_i(exposure_i/100 *
+// move_i/100 * passThrough_i). Both panels call this one function, so
+// there's no separate formula to drift out of sync.
+function computeCostShockPct(rows) {
+  return sum(rows, row => {
+    const exposurePct = Math.max(0, Math.min(100, row.exposure));
+    const pt = isFinite(row.passThrough) ? row.passThrough : 1;
+    return (exposurePct / 100) * (row.move / 100) * pt;
+  });
+}
+// Mirrors refreshSeasonalityDependents() -- called from Sensitivity's own
+// input handlers (never from its initial render, to avoid a redundant
+// double-render of the Goal Planner on every Apply) so the Macro Stress
+// Test line updates live as the CEO edits their External Cost scenario.
+function refreshGoalPlannerFromSensitivity() {
+  if (!lastRenderedCtx) return;
+  const gPanel = document.getElementById("panel-goal-planner");
+  if (gPanel && lastRenderedCtx.cov.cost) renderGoalPlanner(gPanel, lastRenderedCtx);
+}
+
 // Computes the ACTIVE next-quarter baseline (3 named months + total) from
 // whichever seasonality source is selected. This is the single source of
 // truth both renderForecast()'s "Baseline used for planning" block and
@@ -2607,6 +2655,11 @@ function renderGoalPlanner(container, ctx) {
       adSpendCapPct: inputs.adSpendCapPct, adAvailable: adUsable,
       adBaselineSpend, adRoasBase, adDeclineRatePct: inputs.declineRatePct,
     });
+    // Macro Stress Test: the SAME combined cost-shock % External Cost
+    // Sensitivity computes from the CEO's own factor rows (never
+    // re-derived here) -- see computeCostShockPct(). A fraction, e.g.
+    // 0.03 for a 3% cost increase; 0 whenever no scenario is set.
+    const costShockPct = computeCostShockPct(sensitivityRows);
 
     outputDiv.innerHTML = "";
 
@@ -2735,9 +2788,22 @@ function renderGoalPlanner(container, ctx) {
         const targetShare = result.targetRupees * share;
         const achievedRevenue = priceContribution + adRev;
         const achievedProfit = adProfit != null ? priceContribution + adProfit : null;
+        // Macro stress test at the month level: same mechanism as the
+        // quarter-level one below -- raise this month's plan cost by
+        // costShockPct, revenue unchanged, recompute profit, then express
+        // it as GROWTH (same incremental scale as achievedProfit, not
+        // baseline+growth) so the two columns sit side by side comparably.
+        // Baseline profit uses the SAME real measured margin as everywhere
+        // else in this panel (ctx.marginPct), never a shocked one.
+        let stressedAchievedProfit = null;
+        if (achievedProfit != null) {
+          const monthBaselineProfit = m.value * ctx.marginPct;
+          const monthCostUnderPlan = (m.value + achievedRevenue) - (monthBaselineProfit + achievedProfit);
+          stressedAchievedProfit = achievedProfit - costShockPct * monthCostUnderPlan;
+        }
         monthlyData.push({
           pathName: pth.name, month: m.month, monthLabel: `${monthName(m.month)} ${m.month.split("-")[0]}`,
-          baseline: m.value, targetShare, priceContribution, adRev, adProfit, achievedRevenue, achievedProfit,
+          baseline: m.value, targetShare, priceContribution, adRev, adProfit, achievedRevenue, achievedProfit, stressedAchievedProfit,
         });
       });
     });
@@ -2828,6 +2894,7 @@ function renderGoalPlanner(container, ctx) {
       "the bar reaching or passing it means the levers close that month's share of the target.";
     outputDiv.appendChild(chartNote);
 
+    const showStressColumn = Math.abs(costShockPct) > 1e-9;
     const monthlyTable = document.createElement("table");
     monthlyTable.className = "data-table";
     monthlyTable.style.fontSize = "12px";
@@ -2840,11 +2907,13 @@ function renderGoalPlanner(container, ctx) {
         <td class="num">${fmtMoney0(d.priceContribution)}</td>
         <td class="num">${fmtMoney0(d.adRev)}</td>
         <td class="num" style="background:#eafaf0;">${fmtMoney0(d.achievedRevenue)}</td>
-        <td class="num" style="background:#eafaf0;">${d.achievedProfit != null ? fmtMoney0(d.achievedProfit) : "–"}</td>
-      </tr>`);
+        <td class="num" style="background:#eafaf0;">${d.achievedProfit != null ? fmtMoney0(d.achievedProfit) : "–"}</td>` +
+        (showStressColumn ? `<td class="num" style="background:#fdf1e3;">${d.stressedAchievedProfit != null ? fmtMoney0(d.stressedAchievedProfit) : "–"}</td>` : "") +
+      `</tr>`);
     monthlyTable.innerHTML = `<thead><tr><th>Path</th><th>Month</th><th>Baseline (revenue)</th><th>Target share</th>` +
-      `<th>Price lever</th><th>Ad-spend lever (quarter-split)</th><th>Achieved revenue</th><th>Achieved profit</th></tr></thead>` +
-      `<tbody>${monthlyRows.join("")}</tbody>`;
+      `<th>Price lever</th><th>Ad-spend lever (quarter-split)</th><th>Achieved revenue</th><th>Achieved profit</th>` +
+      (showStressColumn ? `<th>Achieved profit (stressed)</th>` : "") +
+      `</tr></thead><tbody>${monthlyRows.join("")}</tbody>`;
     outputDiv.appendChild(monthlyTable);
 
     const monthlyNote = document.createElement("p");
@@ -2852,8 +2921,50 @@ function renderGoalPlanner(container, ctx) {
     monthlyNote.style.marginTop = "8px";
     monthlyNote.textContent = "Each path's monthly Target share, Price lever, Ad-spend lever, Achieved revenue, and Achieved profit columns " +
       "sum exactly to that path's quarter figures above (baselines sum to the quarter's total forecast revenue). \"Achieved profit\" reads " +
-      "\"–\" when Cost isn't mapped, same as the quarter total.";
+      "\"–\" when Cost isn't mapped, same as the quarter total." +
+      (showStressColumn ? " \"Achieved profit (stressed)\" is explained in Macro Stress Test below." : "");
     outputDiv.appendChild(monthlyNote);
+
+    // Macro Stress Test -- a SEPARATE, secondary line layered on top of the
+    // real-margin plan above, never baked into it. Reads costShockPct from
+    // External Cost Sensitivity's own factor rows (computeCostShockPct(),
+    // same formula as that panel's own recompute() -- never re-derived),
+    // and only appears when the CEO has actually set a non-zero scenario.
+    // Revenue is unchanged by a cost shock; only the plan's total cost is
+    // raised by costShockPct, and profit is recomputed from that -- same
+    // mechanism at the quarter level here and the month level above.
+    if (Math.abs(costShockPct) > 1e-9) {
+      const stressHeading = document.createElement("div");
+      stressHeading.style.cssText = "font-size:12px;font-weight:600;margin:18px 0 4px;";
+      stressHeading.textContent = "Macro Stress Test";
+      outputDiv.appendChild(stressHeading);
+
+      const stressSub = document.createElement("p");
+      stressSub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;font-style:italic;";
+      stressSub.textContent = "Macro stress test -- assumes your External Cost scenario (set in the External Cost Sensitivity panel below) " +
+        "occurs alongside this plan. Revenue is unaffected; only costs rise. This is a what-if you set, not a prediction. The real-margin " +
+        "numbers above stay the headline -- this stressed profit is a secondary line, never baked into them.";
+      outputDiv.appendChild(stressSub);
+
+      const stressLine = document.createElement("p");
+      stressLine.style.cssText = "font-size:13px;margin:0 0 8px;";
+      outputDiv.appendChild(stressLine);
+
+      function drawStressLine(pathName) {
+        const pth = result.paths.find(p => p.name === pathName) || result.paths[0];
+        const baselineProfitNextQ = baselineRevenueNextQ * ctx.marginPct;
+        const achievedProfitQuarter = pth.priceContribution + (pth.adProfitContribution || 0);
+        const primaryProfit = baselineProfitNextQ + achievedProfitQuarter;
+        const revenueUnderPlan = baselineRevenueNextQ + pth.priceContribution + pth.adRevContribution;
+        const costUnderPlan = revenueUnderPlan - primaryProfit;
+        const stressedProfit = primaryProfit - costShockPct * costUnderPlan;
+        stressLine.innerHTML = `Under your external-cost scenario (<strong>${fmtPct1(costShockPct)}</strong> higher costs), the ` +
+          `<strong>${pathName}</strong> path's profit next quarter would be <strong>${fmtMoney0(stressedProfit)}</strong> instead of ` +
+          `${fmtMoney0(primaryProfit)}.`;
+      }
+      drawStressLine(pathSelect.value);
+      pathSelect.addEventListener("change", () => drawStressLine(pathSelect.value));
+    }
 
     // Production Plan -- per-SKU units to produce next quarter, driven
     // ONLY by the ad-spend lever's revenue growth. The price lever raises
@@ -3007,32 +3118,20 @@ function renderSensitivity(container, ctx) {
   const totalRevenue = ctx.netRevenue;
   const totalCost = ctx.netRevenue - ctx.marginAbs;
   const baseMarginPct = totalRevenue ? (totalRevenue - totalCost) / totalRevenue : 0;
-  const hasBreakdown = cov.costBreakdown && ctx.costBreakdown && ctx.costBreakdown.length > 0;
   const hasMacro = cov.macro && ctx.macro && ctx.macro.length > 0;
 
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
   container.appendChild(wrap);
 
-  function makeRow(label, exposure, exposureSource, driver, passThroughMid, passThroughSource, linked, range, rationale, macroSeries) {
-    return {
-      label, exposure, exposureSource, move: 5,
-      passThrough: passThroughMid, passThroughSource, driver, linked,
-      passThroughRange: range || null, rationale: rationale || null, macroSeries: macroSeries || [],
-    };
-  }
+  const makeRow = makeSensitivityRow;
 
-  // Factor rows -- fresh every render. See the function-level comment above
-  // for exactly what's measured vs. assumed in each tier.
-  let rows = hasBreakdown
-    ? ctx.costBreakdown.map(r => {
-        const match = matchCommodityLinkage(r.inputType);
-        const exposure = Math.max(0, Math.min(100, r.pctOfCost));
-        return match
-          ? makeRow(r.inputType, exposure, "measured", match.driver, match.passThrough.mid, "library", true, match.passThrough, match.rationale, match.macroSeries)
-          : makeRow(r.inputType, exposure, "measured", null, 1, "manual", false);
-      })
-    : [makeRow("USD", 0, "manual", null, 1, "manual", false)];
+  // Factor rows -- the page-level sensitivityRows, built fresh once per
+  // renderAll() (see buildSensitivityRows() and its call site there) so
+  // the Goal Planner's Macro Stress Test can read the same scenario. Every
+  // edit here mutates this SAME array/object in place, so both panels
+  // always agree without either recomputing the other's numbers.
+  let rows = sensitivityRows;
 
   const rowsContainer = document.createElement("div");
   wrap.appendChild(rowsContainer);
@@ -3044,6 +3143,7 @@ function renderSensitivity(container, ctx) {
   addBtn.addEventListener("click", () => {
     rows.push(makeRow(`Factor ${rows.length + 1}`, 0, "manual", null, 1, "manual", false));
     renderRows();
+    refreshGoalPlannerFromSensitivity();
   });
   wrap.appendChild(addBtn);
 
@@ -3071,7 +3171,7 @@ function renderSensitivity(container, ctx) {
       removeBtn.type = "button"; removeBtn.textContent = "×"; removeBtn.title = "Remove this factor";
       removeBtn.style.cssText = "border:1px solid var(--grid);background:var(--surface);border-radius:4px;cursor:pointer;" +
         "width:28px;height:28px;color:var(--critical);font-weight:700;font-size:15px;line-height:1;flex-shrink:0;";
-      removeBtn.addEventListener("click", () => { rows.splice(i, 1); renderRows(); });
+      removeBtn.addEventListener("click", () => { rows.splice(i, 1); renderRows(); refreshGoalPlannerFromSensitivity(); });
       head.appendChild(labelInput); head.appendChild(badge); head.appendChild(removeBtn);
       card.appendChild(head);
 
@@ -3091,7 +3191,7 @@ function renderSensitivity(container, ctx) {
       const expInput = document.createElement("input");
       expInput.type = "number"; expInput.min = "0"; expInput.max = "100"; expInput.value = String(row.exposure);
       expInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-      expInput.addEventListener("input", () => { row.exposure = Number(expInput.value) || 0; recompute(); });
+      expInput.addEventListener("input", () => { row.exposure = Number(expInput.value) || 0; recompute(); refreshGoalPlannerFromSensitivity(); });
       expCol.appendChild(expInput);
       expCol.appendChild(provenanceNote(
         row.exposureSource === "measured" ? "Exposure: from your cost data." : "Exposure: manual entry.",
@@ -3102,7 +3202,7 @@ function renderSensitivity(container, ctx) {
       const moveInput = document.createElement("input");
       moveInput.type = "number"; moveInput.step = "0.5"; moveInput.value = String(row.move);
       moveInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-      moveInput.addEventListener("input", () => { row.move = Number(moveInput.value) || 0; recompute(); });
+      moveInput.addEventListener("input", () => { row.move = Number(moveInput.value) || 0; recompute(); refreshGoalPlannerFromSensitivity(); });
       moveCol.appendChild(moveInput);
       if (hasMacro && row.macroSeries && row.macroSeries.length) {
         const available = row.macroSeries.filter(s => ctx.macro.some(m => isFinite(m[s])));
@@ -3132,6 +3232,7 @@ function renderSensitivity(container, ctx) {
             if (baseRow && latestRow && isFinite(baseRow[seriesKey]) && isFinite(latestRow[seriesKey]) && baseRow[seriesKey]) {
               row.move = Math.round(((latestRow[seriesKey] - baseRow[seriesKey]) / baseRow[seriesKey]) * 1000) / 10;
               renderRows();
+              refreshGoalPlannerFromSensitivity();
             }
           });
           prefillWrap.appendChild(seriesSelect); prefillWrap.appendChild(baselineSelect); prefillWrap.appendChild(prefillBtn);
@@ -3148,6 +3249,7 @@ function renderSensitivity(container, ctx) {
         row.passThrough = Number(ptInput.value) || 0;
         row.passThroughSource = "manual"; // any manual edit overrides the library default, permanently for this row
         recompute();
+        refreshGoalPlannerFromSensitivity();
       });
       ptCol.appendChild(ptInput);
       ptCol.appendChild(provenanceNote(
@@ -3447,6 +3549,11 @@ function renderAll(state) {
 
   const ctx = computeContext(state);
   lastRenderedCtx = ctx;
+  // Built here, before renderGoalPlanner() below, so its Macro Stress Test
+  // sees THIS dataset's scenario on the very first render -- renderGoalPlanner()
+  // runs before renderSensitivity() further down, so it can't rely on
+  // Sensitivity's own render to have built this yet.
+  sensitivityRows = buildSensitivityRows(ctx);
 
   renderExecSummary(document.getElementById("exec-summary"), ctx);
   renderScorecard(document.getElementById("panel-scorecard"), ctx);

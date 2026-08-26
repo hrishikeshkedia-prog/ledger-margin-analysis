@@ -2355,13 +2355,23 @@ function computeGoalPaths(p) {
   function pathFrom(pricePctUsed, adPctUsed) {
     const priceUsed = Math.max(0, Math.min(priceLever.capPct, pricePctUsed));
     const adUsed = Math.max(0, Math.min(adSearchCapPct, adPctUsed));
+    // priceContribution is the same rupee figure for either goal (pure
+    // margin). adRevContribution / adProfitContribution are BOTH exposed
+    // (not just whichever the active goal needs) so the monthly breakdown
+    // below can show achieved revenue AND achieved profit regardless of
+    // which mode is toggled, same as the "always show both" convention
+    // used throughout this page.
     const priceContribution = priceMetricAt(priceUsed);
     const adRevContribution = adRevenueAt(adUsed);
     const adSpendRupees = adSpendRupeesAt(adUsed);
-    const adMetricContribution = p.goalType === "revenue" ? adRevContribution : (adRevContribution * p.totalMarginPct - adSpendRupees);
+    const adProfitContribution = marginKnown ? (adRevContribution * p.totalMarginPct - adSpendRupees) : null;
+    const adMetricContribution = p.goalType === "revenue" ? adRevContribution : (adProfitContribution || 0);
     const achievedRupees = priceContribution + adMetricContribution;
     const achievedPct = baselineMetricNextQ ? (achievedRupees / baselineMetricNextQ) * 100 : 0;
-    return { priceUsedPct: priceUsed, adUsedPct: adUsed, adSpendRupees, priceContribution, adMetricContribution, achievedRupees, achievedPct };
+    return {
+      priceUsedPct: priceUsed, adUsedPct: adUsed, adSpendRupees, priceContribution,
+      adRevContribution, adProfitContribution, adMetricContribution, achievedRupees, achievedPct,
+    };
   }
 
   const paths = [];
@@ -2656,6 +2666,73 @@ function renderGoalPlanner(container, ctx) {
       "assumed equal to your target. Price is a scenario that assumes demand holds; the ad-spend lever's ROAS is measured but whole-business " +
       "blended, and its decline rate is an editable assumption, never fitted to your data.";
     outputDiv.appendChild(note);
+
+    // Monthly split -- an ADDITION beneath the quarter totals above, never
+    // a replacement. Each month's baseline is the EXACT figure
+    // computeSeasonalityBaseline() already gave the Demand Forecast chart
+    // and the quarter baseline above (seasonalBaseline.perMonth, captured
+    // once at the top of this function) -- never re-derived or evenly
+    // split -- so it moves with the "I'll set it" inputs automatically.
+    // PRICE is genuinely per-month (that month's own baseline x the
+    // path's price %). AD SPEND is computed ONCE at the quarter level
+    // (monthly ROAS isn't something this data can support) and only
+    // SPLIT for display, in proportion to each month's baseline share --
+    // labeled as such below. Both splits are exact fractions of the
+    // quarter figures, so every column sums to its quarter counterpart.
+    const monthlyHeading = document.createElement("div");
+    monthlyHeading.style.cssText = "font-size:12px;font-weight:600;margin:18px 0 4px;";
+    monthlyHeading.textContent = "Monthly Split";
+    outputDiv.appendChild(monthlyHeading);
+
+    const monthlySub = document.createElement("p");
+    monthlySub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;";
+    monthlySub.textContent = "Baselines come straight from the Demand Forecast panel above (same Seasonality Source, including any \"I'll " +
+      "set it\" adjustments). Price is applied per month to that month's own sales; ad-spend effect is computed on the quarter, then shown " +
+      "split across months in proportion to each month's baseline -- never recomputed with a monthly ROAS this data can't support.";
+    outputDiv.appendChild(monthlySub);
+
+    const monthlyBase = seasonalBaseline.perMonth;
+    const totalBaselineRevenue = sum(monthlyBase, m => m.value) || 1;
+    const monthShares = monthlyBase.map(m => m.value / totalBaselineRevenue);
+
+    const monthlyRows = [];
+    result.paths.forEach(pth => {
+      monthlyBase.forEach((m, i) => {
+        const share = monthShares[i];
+        const priceContribution = m.value * (pth.priceUsedPct / 100);
+        const adRev = pth.adRevContribution * share;
+        const adProfit = pth.adProfitContribution != null ? pth.adProfitContribution * share : null;
+        const targetShare = result.targetRupees * share;
+        const achievedRevenue = priceContribution + adRev;
+        const achievedProfit = adProfit != null ? priceContribution + adProfit : null;
+        monthlyRows.push(`
+          <tr>
+            <td>${pth.name}</td>
+            <td>${monthName(m.month)} ${m.month.split("-")[0]}</td>
+            <td class="num">${fmtMoney0(m.value)}</td>
+            <td class="num">${fmtMoney0(targetShare)}</td>
+            <td class="num">${fmtMoney0(priceContribution)}</td>
+            <td class="num">${fmtMoney0(adRev)}</td>
+            <td class="num" style="background:#eafaf0;">${fmtMoney0(achievedRevenue)}</td>
+            <td class="num" style="background:#eafaf0;">${achievedProfit != null ? fmtMoney0(achievedProfit) : "–"}</td>
+          </tr>`);
+      });
+    });
+    const monthlyTable = document.createElement("table");
+    monthlyTable.className = "data-table";
+    monthlyTable.style.fontSize = "12px";
+    monthlyTable.innerHTML = `<thead><tr><th>Path</th><th>Month</th><th>Baseline (revenue)</th><th>Target share</th>` +
+      `<th>Price lever</th><th>Ad-spend lever (quarter-split)</th><th>Achieved revenue</th><th>Achieved profit</th></tr></thead>` +
+      `<tbody>${monthlyRows.join("")}</tbody>`;
+    outputDiv.appendChild(monthlyTable);
+
+    const monthlyNote = document.createElement("p");
+    monthlyNote.className = "chart-caption";
+    monthlyNote.style.marginTop = "8px";
+    monthlyNote.textContent = "Each path's monthly Target share, Price lever, Ad-spend lever, Achieved revenue, and Achieved profit columns " +
+      "sum exactly to that path's quarter figures above (baselines sum to the quarter's total forecast revenue). \"Achieved profit\" reads " +
+      "\"–\" when Cost isn't mapped, same as the quarter total.";
+    outputDiv.appendChild(monthlyNote);
   }
 
   recompute();

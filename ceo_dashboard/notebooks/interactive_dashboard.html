@@ -439,6 +439,13 @@ const CONFIG = {
   deadStockWarningThreshold: 0.05,// scorecard flags Dead-Stock % red above this
   forecastHoldoutMonths: 3,       // how many trailing months the live self-validation backtest holds out
   forecastMinTrainMonths: 4,      // minimum training months required on top of the holdout (so >= 7 months total)
+  // Ad-spend diminishing-returns decline default, %/pt -- anchored to a
+  // real observed data point (this business's July marginal ROAS, ~1.85x,
+  // against a blended base ROAS around 3.19x): 3.19 * (1 - 0.9/100)^60 ~=
+  // 1.85, i.e. this default makes marginal ROAS fall to ~1.85x by +60%
+  // spend, matching what was actually observed -- still fully editable,
+  // never silently re-fitted to whatever dataset is loaded.
+  adDeclineDefaultPct: 0.9,
 };
 
 /* =============================================================================
@@ -1875,7 +1882,7 @@ let lastRenderedCtx = null;
 // CEO already set instead of silently reverting to hardcoded defaults --
 // the Monthly Stack chart in particular depends on goalType surviving a
 // seasonality edit to keep showing the metric the CEO actually selected.
-let goalPlannerInputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: 0.5 };
+let goalPlannerInputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: CONFIG.adDeclineDefaultPct };
 // Only refreshes the Goal Planner -- the Forecast panel manages its own
 // seasonality-source block in place (see renderSeasonalitySourceBlock)
 // specifically so typing into a "% change" field never gets its own input
@@ -2611,8 +2618,9 @@ function renderGoalPlanner(container, ctx) {
       `(${fmtMoney0(adBaselineRevenue)} revenue / ${fmtMoney0(adBaselineSpend)} ad spend).`;
     adCard.appendChild(roasP);
     const blendP = document.createElement("p");
-    blendP.style.cssText = "font-size:10.5px;color:var(--ink-muted);margin:0 0 10px;";
-    blendP.textContent = "Whole-business, blended ratio -- doesn't separate out revenue that would have happened anyway (organic, repeat, offline).";
+    blendP.style.cssText = "font-size:10.5px;color:#8a5a00;margin:0 0 10px;";
+    blendP.textContent = `This starts from your blended ROAS (${adRoasBase.toFixed(2)}x), which credits ads for organic/repeat/offline sales. ` +
+      `The marginal return on new spend is lower -- your July data showed ~1.85x. Treat high-spend profit gains with caution.`;
     adCard.appendChild(blendP);
   }
 
@@ -2634,9 +2642,32 @@ function renderGoalPlanner(container, ctx) {
   declineInput.type = "number"; declineInput.min = "0"; declineInput.max = "100"; declineInput.step = "0.1"; declineInput.value = String(inputs.declineRatePct);
   declineInput.disabled = !adUsable;
   declineInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  declineInput.addEventListener("input", () => { inputs.declineRatePct = Math.max(0, Number(declineInput.value) || 0); recompute(); });
   declineCol.appendChild(declineInput);
-  declineCol.appendChild(provenanceNote("Assumption (editable): marginal ROAS falls by this % per extra 1 percentage point of spend -- never fitted to your data.", true));
+  declineCol.appendChild(provenanceNote(`Default anchored to your July data point (marginal ROAS ~1.85x by +60% spend) -- editable, never ` +
+    `fitted to your data automatically.`, true));
+  const declineZeroWarning = document.createElement("div");
+  declineZeroWarning.style.cssText = "font-size:10.5px;margin-top:3px;color:var(--critical);font-weight:600;display:none;";
+  declineZeroWarning.textContent = "0 = no diminishing returns -- profit will rise indefinitely with spend, which is unrealistic.";
+  declineCol.appendChild(declineZeroWarning);
+  function updateDeclineZeroWarning() { declineZeroWarning.style.display = inputs.declineRatePct === 0 ? "" : "none"; }
+  updateDeclineZeroWarning();
+  // Blank clears to the anchored default, NEVER to 0 -- an empty field
+  // silently read as 0 would mean "no diminishing returns," letting
+  // profit rise without limit, which is the exact bug this guards
+  // against. An explicit "0" is a deliberate choice, kept as 0 but flagged
+  // above so it's never mistaken for a default.
+  declineInput.addEventListener("input", () => {
+    const raw = declineInput.value.trim();
+    const parsed = Number(raw);
+    if (raw === "" || !isFinite(parsed)) {
+      inputs.declineRatePct = CONFIG.adDeclineDefaultPct;
+      declineInput.value = String(CONFIG.adDeclineDefaultPct);
+    } else {
+      inputs.declineRatePct = Math.max(0, parsed);
+    }
+    updateDeclineZeroWarning();
+    recompute();
+  });
   adFieldsRow.appendChild(declineCol);
 
   const outputDiv = document.createElement("div");
@@ -2674,6 +2705,15 @@ function renderGoalPlanner(container, ctx) {
     tilesRow.appendChild(tile("Target", fmtMoney0(result.targetRupees)));
     tilesRow.appendChild(tile("Max reachable within your caps", (result.maxReachablePct >= 0 ? "+" : "") + result.maxReachablePct.toFixed(1) + "%", !result.reachable));
     outputDiv.appendChild(tilesRow);
+
+    if (inputs.goalType === "profit" && adUsable) {
+      const roasCaveat = document.createElement("p");
+      roasCaveat.style.cssText = "font-size:11px;color:#8a5a00;margin:0 0 10px;";
+      roasCaveat.textContent = `Reminder: this profit path starts from your blended ROAS (${adRoasBase.toFixed(2)}x), which credits ads for ` +
+        `organic/repeat/offline sales -- the marginal return on new spend is lower (your July data showed ~1.85x). Treat high-spend profit ` +
+        `gains with caution.`;
+      outputDiv.appendChild(roasCaveat);
+    }
 
     if (!result.adLever.available && result.adLever.note) {
       const noAdOut = document.createElement("p");

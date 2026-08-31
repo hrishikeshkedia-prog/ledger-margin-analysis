@@ -41,6 +41,21 @@ section h3 { font-size: 17px; margin: 24px 0 12px; color: var(--ink-secondary); 
 .chart-block { background: var(--surface); border: 1px solid var(--grid); border-radius: 10px;
   padding: 16px 16px 14px; margin-bottom: 20px; }
 .chart-title { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
+.info-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; background: var(--grid); color: var(--ink-secondary);
+  font-size: 10px; font-weight: 700; font-style: italic; font-family: Georgia, "Times New Roman", serif;
+  cursor: pointer; margin-left: 6px; position: relative; vertical-align: middle; user-select: none;
+}
+.info-icon:hover, .info-icon:focus, .info-icon.info-open { background: var(--accent); color: #fff; outline: none; }
+.info-icon .info-tooltip {
+  visibility: hidden; opacity: 0; position: absolute; left: 50%; bottom: 135%; transform: translateX(-50%);
+  background: #1f2430; color: #fff; text-align: left; padding: 8px 10px; border-radius: 6px;
+  font-size: 11.5px; font-weight: 400; font-style: normal; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.4; white-space: normal; width: max-content; max-width: 240px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  z-index: 50; transition: opacity 0.12s ease; pointer-events: none;
+}
+.info-icon:hover .info-tooltip, .info-icon:focus .info-tooltip, .info-icon.info-open .info-tooltip { visibility: visible; opacity: 1; }
 .chart-caption { font-size: 12px; color: var(--ink-secondary); margin: 10px 0 0; max-width: 100ch; }
 .panel-row { display: grid; gap: 20px; }
 .panel-row.cols-2 { grid-template-columns: 1fr 1fr; }
@@ -1478,11 +1493,39 @@ function seqBlueColor(v) {
       a static PNG.
    ============================================================================= */
 
-function panelHeader(container, title, subtitle) {
+// Small "i" badge: hover shows its tooltip via CSS alone; a tap/click
+// toggles it via .info-open, since touch devices have no hover state.
+// Plain-language, one-line, CEO-facing -- never the formula itself, just
+// what the number MEANS, so the dashboard reads without being explained.
+function infoIcon(defText) {
+  const icon = document.createElement("span");
+  icon.className = "info-icon";
+  icon.textContent = "i";
+  icon.tabIndex = 0;
+  icon.setAttribute("role", "button");
+  icon.setAttribute("aria-label", "Info: " + defText);
+  const tip = document.createElement("span");
+  tip.className = "info-tooltip";
+  tip.textContent = defText;
+  icon.appendChild(tip);
+  icon.addEventListener("click", e => {
+    e.stopPropagation();
+    const wasOpen = icon.classList.contains("info-open");
+    document.querySelectorAll(".info-icon.info-open").forEach(el => el.classList.remove("info-open"));
+    if (!wasOpen) icon.classList.add("info-open");
+  });
+  return icon;
+}
+document.addEventListener("click", () => {
+  document.querySelectorAll(".info-icon.info-open").forEach(el => el.classList.remove("info-open"));
+});
+
+function panelHeader(container, title, subtitle, infoText) {
   container.innerHTML = "";
   const h = document.createElement("div");
   h.className = "chart-title";
-  h.textContent = title;
+  h.appendChild(document.createTextNode(title));
+  if (infoText) h.appendChild(infoIcon(infoText));
   container.appendChild(h);
   if (subtitle) {
     const s = document.createElement("div");
@@ -1503,12 +1546,13 @@ function subplotRow(container, cols) {
   container.appendChild(row);
   return row;
 }
-function subplotCol(row, titleText) {
+function subplotCol(row, titleText, infoText) {
   const col = document.createElement("div");
   if (titleText) {
     const t = document.createElement("div");
     t.className = "subplot-title";
-    t.textContent = titleText;
+    t.appendChild(document.createTextNode(titleText));
+    if (infoText) t.appendChild(infoIcon(infoText));
     col.appendChild(t);
   }
   row.appendChild(col);
@@ -1549,18 +1593,29 @@ function renderScorecard(container, ctx) {
   const { revenueTrend, marginAbs, marginPct, returnsBridge, concentration, deadStock, cac, cov, isDefault } = ctx;
   const netRevenue = sum(revenueTrend, r => r.netRevenue);
 
+  // Same returns-aware labeling as the Trend panel: without a mapped
+  // returns column every row's isReturn is false, so this figure already
+  // IS gross revenue (see Engine.netRevenue) -- only "Net" would be a
+  // misleading label there.
+  const revenueTileLabel = cov.returns ? "Net Revenue (window)" : "Revenue (window)";
+  const revenueTileInfo = cov.returns
+    ? "Total revenue collected in the loaded date range, after removing returned orders."
+    : "Total revenue collected in the loaded date range. No returns data loaded, so this is gross revenue.";
+
   const tiles = [];
-  tiles.push(["Net Revenue (window)", fmtCr(netRevenue), false]);
+  tiles.push([revenueTileLabel, fmtCr(netRevenue), false, revenueTileInfo]);
   if (cov.cost) {
-    tiles.push(["Gross Margin %", fmtPct1(marginPct), false]);
-    tiles.push(["Gross Margin (window)", fmtCr(marginAbs), false]);
+    tiles.push(["Gross Margin %", fmtPct1(marginPct), false, "Revenue minus cost of goods, as a % of revenue -- before ad spend."]);
+    tiles.push(["Gross Margin (window)", fmtCr(marginAbs), false, "Total gross margin (revenue minus cost of goods) earned in the loaded date range."]);
   }
   if (cov.sku) {
-    tiles.push([`Top 10 Concentration`, fmtPct0(concentration.share), false]);
+    tiles.push([`Top 10 Concentration`, fmtPct0(concentration.share), false,
+      "Share of total revenue coming from your 10 best-selling products -- high means you're dependent on a few bestsellers."]);
   }
   if (cov.returns && cov.cost) {
     const pct = returnsBridge.grossMarginNoReturns ? -returnsBridge.returnsImpact / returnsBridge.grossMarginNoReturns : 0;
-    tiles.push(["Returns Cost (% of Margin)", fmtPct1(pct), pct > CONFIG.returnsWarningThreshold]);
+    tiles.push(["Returns Cost (% of Margin)", fmtPct1(pct), pct > CONFIG.returnsWarningThreshold,
+      "How much of your margin returned orders take back."]);
   }
   if (cov.marketing && cov.cost && cac && cac.length) {
     const totalSpend = sum(cac, c => c.spend);
@@ -1569,21 +1624,25 @@ function renderScorecard(container, ctx) {
     const avgMarginPerRow = ctx.avgMarginPerRow || 0;
     const ltv = avgMarginPerRow * CONFIG.ltvAssumedLifetimeOrders;
     const ltvCac = blendedCac ? ltv / blendedCac : NaN;
-    tiles.push(["Blended LTV:CAC", isFinite(ltvCac) ? ltvCac.toFixed(1) + "x" : "–", isFinite(ltvCac) && ltvCac < CONFIG.ltvCacWarningThreshold]);
+    tiles.push(["Blended LTV:CAC", isFinite(ltvCac) ? ltvCac.toFixed(1) + "x" : "–", isFinite(ltvCac) && ltvCac < CONFIG.ltvCacWarningThreshold,
+      "Estimated lifetime value of a customer, divided by what it costs to acquire one (CAC) -- above 3x is generally considered healthy."]);
   }
   if (cov.inventory) {
-    tiles.push(["Dead-Stock %", fmtPct1(deadStock.pct), deadStock.pct > CONFIG.deadStockWarningThreshold]);
+    tiles.push(["Dead-Stock %", fmtPct1(deadStock.pct), deadStock.pct > CONFIG.deadStockWarningThreshold,
+      "Share of inventory that has sat too long without selling."]);
   }
 
-  panelHeader(container, isDefault ? "CEO Scorecard — DIY Kits (real order data)" : "CEO Scorecard — your data");
+  panelHeader(container, isDefault ? "CEO Scorecard — DIY Kits (real order data)" : "CEO Scorecard — your data", null,
+    "The headline numbers for your business at a glance -- revenue, margin, and any red flags worth a second look.");
   const grid = document.createElement("div");
   grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:10px 0 4px;";
-  tiles.forEach(([label, value, warn]) => {
+  tiles.forEach(([label, value, warn, infoText]) => {
     const tile = document.createElement("div");
     tile.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px 10px;text-align:center;background:var(--page);";
     const lbl = document.createElement("div");
     lbl.style.cssText = "font-size:12px;color:var(--ink-secondary);margin-bottom:6px;min-height:30px;";
-    lbl.textContent = label;
+    lbl.appendChild(document.createTextNode(label));
+    if (infoText) lbl.appendChild(infoIcon(infoText));
     const val = document.createElement("div");
     val.style.cssText = `font-size:22px;font-weight:700;color:${warn ? COLORS.status.critical : COLORS.ink.primary};`;
     val.textContent = value;
@@ -1598,12 +1657,22 @@ function renderTrend(container, ctx) {
   const { revenueTrend, marginTrend, cov, monthNotes } = ctx;
   const months = revenueTrend.map(r => r.month);
   const hasNotes = monthNotes && monthNotes.size > 0;
-  panelHeader(container, cov.cost ? "Revenue & Margin Trend" : "Revenue Trend");
+  panelHeader(container, cov.cost ? "Revenue & Margin Trend" : "Revenue Trend", null,
+    "How revenue (and margin, if mapped) has moved month over month.");
   const row = subplotRow(container, "panel-row");
   row.style.display = "block";
 
   const isLast = !cov.cost;
-  const c1 = subplotCol(row, "Net Revenue"); c1.style.marginBottom = cov.cost ? "6px" : "0";
+  // Label follows what the data actually supports: without a mapped
+  // returns column, isReturn defaults false for every row, so this figure
+  // IS gross revenue already (see Engine.netRevenue) -- only the label was
+  // ever misleading, calling it "Net" would imply an adjustment that isn't
+  // happening. No calculation changes here, only the label and its info text.
+  const revenueSubplotLabel = cov.returns ? "Net Revenue (after returns)" : "Revenue";
+  const revenueSubplotInfo = cov.returns
+    ? "Revenue after removing returned orders."
+    : "No returns data loaded, so this is gross revenue.";
+  const c1 = subplotCol(row, revenueSubplotLabel, revenueSubplotInfo); c1.style.marginBottom = cov.cost ? "6px" : "0";
   // Reserve extra top margin for the annotation dot + label when notes are
   // mapped, so they never collide with the tallest bar.
   const svg1Height = (isLast ? 220 : 170) + (hasNotes ? 22 : 0);
@@ -1617,13 +1686,14 @@ function renderTrend(container, ctx) {
   if (hasNotes) drawMonthAnnotations(svg1, f1, container, months, monthNotes);
 
   if (cov.cost) {
-    const c2 = subplotCol(row, "Gross Margin %"); c2.style.marginBottom = "6px";
+    const c2 = subplotCol(row, "Gross Margin %", "Revenue minus cost of goods, as a % of revenue -- before ad spend and other overhead.");
+    c2.style.marginBottom = "6px";
     const svg2 = makeSvg(150); c2.appendChild(svg2);
     const vals2 = marginTrend.map(r => r.marginPct);
     const f2 = drawVFrame(svg2, { yMin: Math.min(...vals2, 0) * 0.9, yMax: Math.max(...vals2, 0.01) * 1.1, yFormat: fmtPct0, xCategories: months, marginB: 4 });
     drawLine(svg2, f2, months, vals2, COLORS.categorical[2]);
 
-    const c3 = subplotCol(row, "Gross Margin per Unit Sold");
+    const c3 = subplotCol(row, "Gross Margin per Unit Sold", "Average gross margin (revenue minus cost of goods) earned per unit sold that month.");
     const svg3 = makeSvg(170); c3.appendChild(svg3);
     const vals3 = marginTrend.map(r => r.marginPerUnit);
     const f3 = drawVFrame(svg3, { yMin: Math.min(...vals3, 0) * 1.1, yMax: Math.max(...vals3, 1) * 1.1, yFormat: commas, xCategories: months, xRotate: true });
@@ -1677,7 +1747,8 @@ function renderReturnsBridge(container, ctx) {
     ? ["Gross Revenue (no returns)", "Returns Impact", "Net Revenue (actual)"]
     : ["Gross Margin (no returns)", "Returns Impact", "Net Margin (actual)"];
   panelHeader(container, isRevenueOnly ? "Returns Revenue Bridge — Full Window" : "Returns Margin Bridge — Full Window",
-    isRevenueOnly ? "No Cost column mapped -- showing revenue given back to returns, not margin. Map Cost for the fuller margin view." : null);
+    isRevenueOnly ? "No Cost column mapped -- showing revenue given back to returns, not margin. Map Cost for the fuller margin view." : null,
+    "How much of your revenue (or margin) returned orders take back, start to finish.");
   const svg = makeSvg(320);
   container.appendChild(svg);
 
@@ -1712,44 +1783,59 @@ function renderReturnsBridge(container, ctx) {
 function renderMarginBySku(container, ctx) {
   const { skuRows, cov, totalSkuCount } = ctx;
   const hasAllocation = cov.marketing; // skuRows carries cmAfterSpend only when Channel Economics tier is also active
-  // Cap n so "best" and "worst" never overlap when the catalog is small
-  // (a 12-SKU business would otherwise see the same 12 products in both panels).
-  const n = Math.max(1, Math.min(12, Math.floor(skuRows.length / 2)));
   const key = hasAllocation ? "cmAfterSpend" : "marginAbs";
+  // skuMarginAfterSpend() (used when a Marketing Spend file is loaded)
+  // returns margin figures only, no revenue -- pulled here from the plain
+  // per-SKU revenue sum purely for this Revenue column. Display-only, no
+  // margin math touched.
+  const revenueBySku = hasAllocation ? new Map(Engine.marginBySku(ctx.txns).map(r => [r.sku, r.netRevenue])) : null;
+  const revenueFor = r => hasAllocation ? (revenueBySku.get(r.sku) || 0) : r.netRevenue;
+
   const sorted = skuRows.slice().sort((a, b) => b[key] - a[key]);
-  const top = sorted.slice(0, n).slice().sort((a, b) => a[key] - b[key]);
-  const bottom = sorted.slice(-n).slice().sort((a, b) => b[key] - a[key]);
   const nLoss = hasAllocation ? skuRows.filter(r => r.isLossMaking).length : skuRows.filter(r => r[key] < 0).length;
 
-  panelHeader(container, hasAllocation ? "Margin by Product, after Marketing Cost" : "Margin by Product");
-  const row = subplotRow(container, "panel-row cols-2");
-  const c1 = subplotCol(row, `Best ${n} Products`);
-  const c2 = subplotCol(row, `Worst ${n} Products`);
-  const h = Math.max(320, 26 * n);
-  const svg1 = makeSvg(h); c1.appendChild(svg1);
-  const svg2 = makeSvg(h); c2.appendChild(svg2);
+  panelHeader(container, hasAllocation ? "Margin by Product, after Marketing Cost" : "Margin by Product", null,
+    "Every product, stack-ranked by margin earned -- best to worst.");
 
-  const topCats = top.map(r => r.sku), topVals = top.map(r => r[key]);
-  const f1 = drawHFrame(svg1, { xMin: 0, xMax: Math.max(...topVals, 1) * 1.3, yCategories: topCats });
-  drawHBars(svg1, f1, topCats, topVals, () => COLORS.categorical[0], v => fmtMoney0(v));
+  // Honest per-case wording: skuMarginAfterSpend()'s cmAfterSpend really is
+  // net of ad spend, but marginAbs (the no-marketing-file default) is
+  // GROSS margin only (revenue - COGS) -- the mentor's point exactly, so
+  // this states plainly which one is on screen rather than always saying
+  // the same thing regardless of which metric is actually shown.
+  const marginInfoText = hasAllocation
+    ? "Margin after allocating this product's share of marketing spend -- net of ad cost."
+    : "GROSS margin (revenue minus cost of goods) -- NOT net of ad spend.";
 
-  const botCats = bottom.map(r => r.sku), botVals = bottom.map(r => r[key]);
-  const f2 = drawHFrame(svg2, { xMin: Math.min(...botVals, 0) * 1.3, xMax: Math.max(...botVals, 1) * 1.3, yCategories: botCats });
-  drawHBars(svg2, f2, botCats, botVals, v => v < 0 ? COLORS.status.critical : COLORS.categorical[0], v => fmtMoney0(v));
+  const rowsHtml = sorted.map(r => `
+    <tr>
+      <td>${r.sku}</td>
+      <td class="num"${r[key] < 0 ? ' style="color:var(--critical);font-weight:600;"' : ""}>${fmtMoney0(r[key])}</td>
+      <td class="num">${fmtMoney0(revenueFor(r))}</td>
+    </tr>`);
+  const table = document.createElement("table");
+  table.className = "data-table";
+  table.style.fontSize = "13px";
+  table.innerHTML = `<thead><tr><th>Product</th><th id="sku-margin-th">Margin</th><th>Revenue</th></tr></thead>` +
+    `<tbody>${rowsHtml.join("")}</tbody>`;
+  container.appendChild(table);
+  table.querySelector("#sku-margin-th").appendChild(infoIcon(marginInfoText));
 
-  panelCaption(container, `${nLoss} of ${totalSkuCount} products are loss-making${hasAllocation ? " after marketing cost" : ""} (red, right panel).`);
+  panelCaption(container, `${nLoss} of ${totalSkuCount} products are loss-making${hasAllocation ? " after marketing cost" : ""} (red rows).`);
 }
 
 function renderChannel(container, ctx) {
   const { cac, channelMarginAfterSpend, cov } = ctx;
-  panelHeader(container, "Channel Economics: Acquisition Cost and Payback");
+  panelHeader(container, "Channel Economics: Acquisition Cost and Payback", null,
+    "What it costs to win a customer on each marketing channel, and whether that spend pays for itself in margin.");
   const isProxy = cac.length && cac[0].isProxy;
 
   if (!cov.cost) {
     // No Cost mapped: can still show acquisition cost by channel, just not
     // the margin-after-spend panel (which needs cost to compute margin).
     const row = subplotRow(container, "panel-row");
-    const c1 = subplotCol(row, isProxy ? "Cost per Order (₹, proxy — no Customer ID mapped)" : "True CAC (₹ per new customer)");
+    const c1 = subplotCol(row, isProxy ? "Cost per Order (₹, proxy — no Customer ID mapped)" : "True CAC (₹ per new customer)",
+      isProxy ? "Marketing spend divided by orders on this channel -- a rough stand-in for CAC since no Customer ID is mapped to tell new customers from repeat ones."
+        : "How much you spent in marketing to acquire one NEW customer on this channel.");
     const svg1 = makeSvg(280); c1.appendChild(svg1);
     const cacCats = cac.map(r => r.channel), cacVals = cac.map(r => r.metric);
     const f1 = drawVFrame(svg1, { yMin: 0, yMax: Math.max(...cacVals.filter(isFinite), 1) * 1.25, yFormat: commas, xCategories: cacCats, marginB: 30 });
@@ -1760,7 +1846,8 @@ function renderChannel(container, ctx) {
 
   const row = subplotRow(container, "panel-row cols-2");
   const c1 = subplotCol(row, isProxy ? "Cost per Order (₹, proxy — no Customer ID mapped)" : "True CAC (₹ per new customer)");
-  const c2 = subplotCol(row, "Margin after Marketing Spend (₹)");
+  const c2 = subplotCol(row, "Margin after Marketing Spend (₹)",
+    "Gross margin earned on this channel, minus what was spent acquiring customers on it.");
   const svg1 = makeSvg(280); c1.appendChild(svg1);
   const svg2 = makeSvg(280); c2.appendChild(svg2);
 
@@ -1781,7 +1868,8 @@ function renderChannel(container, ctx) {
 
 function renderAlerts(container, ctx) {
   const { alerts, totalSkuCount } = ctx;
-  panelHeader(container, "Margin-Risk Alerts");
+  panelHeader(container, "Margin-Risk Alerts", null,
+    "Products or channels whose margin is thin, negative, or trending the wrong way -- flagged automatically for a closer look.");
   if (!alerts.length) {
     const p = document.createElement("p");
     p.className = "chart-caption";
@@ -1810,7 +1898,8 @@ function renderAlerts(container, ctx) {
 function renderInventory(container, ctx) {
   const { sellThroughMonthly, cumulativeSellThrough, deadStock } = ctx;
   const nTail = 15;
-  panelHeader(container, "Inventory Health: Sell-Through and Dead Stock");
+  panelHeader(container, "Inventory Health: Sell-Through and Dead Stock", null,
+    "How much of what you stocked has actually sold, and which products have sat too long without selling.");
   const row = subplotRow(container, "panel-row cols-2 uneven");
   const c1 = subplotCol(row, "Company Sell-Through Rate (monthly)");
   const c2 = subplotCol(row, `Bottom ${nTail} SKUs — Cumulative Sell-Through`);
@@ -1832,7 +1921,8 @@ function renderInventory(container, ctx) {
 
 function renderCohort(container, ctx) {
   const { cohort } = ctx;
-  panelHeader(container, "Cohort Retention Heatmap");
+  panelHeader(container, "Cohort Retention Heatmap", null,
+    "Of customers who first bought in a given month, what share came back to buy again in each month after.");
   const { cohorts, offsets, table } = cohort;
   const rowH = 26, marginL = 100, marginT = 24, marginR = 60;
   const width = 1000 - marginL - marginR;
@@ -2118,7 +2208,8 @@ function renderSeasonalitySourceBlock(container, ctx, onBaselineChange) {
 
 function renderForecast(container, ctx) {
   const { forecast, cov } = ctx;
-  panelHeader(container, "Demand Forecast — Next 3 Months");
+  panelHeader(container, "Demand Forecast — Next 3 Months", null,
+    "A projection of next quarter's revenue, built from your own historical trend and seasonal pattern -- never a guarantee.");
 
   if (forecast.tooThin) {
     const p = document.createElement("p");
@@ -2463,7 +2554,8 @@ function computeGoalPaths(p) {
 
 function renderGoalPlanner(container, ctx) {
   const { cov } = ctx;
-  panelHeader(container, "Goal Planner — Reach a Target Next Quarter");
+  panelHeader(container, "Goal Planner — Reach a Target Next Quarter", null,
+    "A what-if tool: pick a growth target, and see how much price increase and ad spend it would take to reach it.");
 
   if (!cov.cost) {
     const p = document.createElement("p");
@@ -3144,7 +3236,8 @@ function renderGoalPlanner(container, ctx) {
 // pass-through), which reproduces the pre-library behavior exactly.
 function renderSensitivity(container, ctx) {
   const { cov } = ctx;
-  panelHeader(container, "External Cost Sensitivity (What-If)");
+  panelHeader(container, "External Cost Sensitivity (What-If)", null,
+    "A what-if tool: see how your margin would move if a cost input (like fabric or fuel) got more expensive.");
 
   if (!cov.cost) {
     const p = document.createElement("p");

@@ -1972,7 +1972,12 @@ let lastRenderedCtx = null;
 // CEO already set instead of silently reverting to hardcoded defaults --
 // the Monthly Stack chart in particular depends on goalType surviving a
 // seasonality edit to keep showing the metric the CEO actually selected.
-let goalPlannerInputs = { goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: CONFIG.adDeclineDefaultPct };
+let goalPlannerInputs = {
+  goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: CONFIG.adDeclineDefaultPct,
+  // Offline lever defaults to 0% growth so a freshly loaded plan is
+  // untouched by it -- opt-in, not a silent third lever added under you.
+  offlineCapPct: 0, offlineCommissionPct: 15,
+};
 // Only refreshes the Goal Planner -- the Forecast panel manages its own
 // seasonality-source block in place (see renderSeasonalitySourceBlock)
 // specifically so typing into a "% change" field never gets its own input
@@ -2457,16 +2462,47 @@ function computeGoalPaths(p) {
     };
   }
 
+  // Offline-distribution lever: LINEAR, no diminishing-returns curve --
+  // unlike ad spend, there's no measured driver for offline growth in the
+  // data, so it's purely a straight % assumption the CEO supplies (see the
+  // Offline Lever card's own "your assumption -- no measured driver"
+  // label). The channel commission is treated as a cost ON TOP OF COGS,
+  // charged on the full extra revenue -- NOT a cut taken before product
+  // margin applies (see the commission field's own note for why: a
+  // channel's "20% commission" is standardly 20% of the sale price, not
+  // 20% of your margin). So: offlineProfit = extraOfflineRevenue x
+  // grossMargin − extraOfflineRevenue x commission%, i.e. per-rupee
+  // profit = grossMargin − commission%.
+  const offlineAvailable = p.offlineAvailable && p.offlineBaselineRevenue > 0;
+  const offlineMetricPerPointRupees = !offlineAvailable ? 0
+    : p.goalType === "revenue" ? (p.offlineBaselineRevenue / 100)
+    : (p.offlineBaselineRevenue / 100) * (p.totalMarginPct - p.offlineCommissionPct / 100);
+  // Never search into an offline % that would HURT profit (mirrors the ad
+  // lever's own profitUsefulCapPct discipline) -- if the channel's
+  // commission eats more than the product's own margin, growing offline
+  // sales destroys profit per extra rupee, so the useful cap collapses to 0.
+  const offlineSearchCapPct = (p.goalType === "profit" && offlineMetricPerPointRupees <= 0) ? 0 : p.offlineCapPct;
+  const offlineLever = {
+    capPct: p.offlineCapPct, available: offlineAvailable,
+    maxRevenueContributionRupees: offlineAvailable ? p.offlineBaselineRevenue * (p.offlineCapPct / 100) : 0,
+    maxProfitContributionRupees: offlineAvailable && marginKnown ? offlineSearchCapPct * offlineMetricPerPointRupees : (marginKnown ? 0 : null),
+    note: !offlineAvailable ? "Add (or map) a Channel column in Transactions, so offline/unattributed sales can be identified, to unlock this lever." : null,
+  };
+
   const baselineMetricNextQ = p.goalType === "revenue" ? p.baselineRevenueNextQ : p.baselineRevenueNextQ * p.totalMarginPct;
   const targetRupees = baselineMetricNextQ * (p.targetPct / 100);
   const adMaxContribution = p.goalType === "revenue" ? adLever.maxRevenueContributionRupees : (adLever.maxProfitContributionRupees || 0);
-  const maxReachableRupees = priceLever.maxContributionRupees + adMaxContribution;
+  const offlineMaxContribution = p.goalType === "revenue" ? offlineLever.maxRevenueContributionRupees : (offlineLever.maxProfitContributionRupees || 0);
+  const maxReachableRupees = priceLever.maxContributionRupees + adMaxContribution + Math.max(0, offlineMaxContribution);
   const maxReachablePct = baselineMetricNextQ ? (maxReachableRupees / baselineMetricNextQ) * 100 : 0;
   const reachable = maxReachableRupees >= targetRupees - 1e-6;
 
   const pricePerPoint = priceLever.capPct > 0 ? priceLever.maxContributionRupees / priceLever.capPct : 0;
   const adPerPoint = (adLever.available && adLever.capPct > 0) ? adMaxContribution / adLever.capPct : 0;
-  const bindingLimit = reachable ? null : (adPerPoint > pricePerPoint ? "ad" : "price");
+  const offlinePerPoint = (offlineLever.available && offlineLever.capPct > 0) ? offlineMaxContribution / offlineLever.capPct : 0;
+  const bindingLimit = reachable ? null
+    : (offlinePerPoint >= adPerPoint && offlinePerPoint >= pricePerPoint) ? "offline"
+    : (adPerPoint > pricePerPoint) ? "ad" : "price";
 
   // The ad lever's SEARCH range never exceeds where it stops helping the
   // ACTIVE goal -- so a path never recommends spending past the point
@@ -2504,12 +2540,27 @@ function computeGoalPaths(p) {
     }
     return hi;
   }
+  function offlineRevenueAt(pctUsed) {
+    if (!offlineLever.available || pctUsed <= 0) return 0;
+    return p.offlineBaselineRevenue * (pctUsed / 100);
+  }
+  function offlineMetricAt(pctUsed) {
+    if (!offlineLever.available || pctUsed <= 0) return 0;
+    return Math.max(0, Math.min(offlineSearchCapPct, pctUsed)) * offlineMetricPerPointRupees;
+  }
+  // Offline is linear, so its gap-fill is a direct solve, not a search.
+  function offlinePctForGap(gapRupees) {
+    if (offlineSearchCapPct <= 0 || gapRupees <= 0 || offlineMetricPerPointRupees <= 0) return 0;
+    return Math.min(offlineSearchCapPct, gapRupees / offlineMetricPerPointRupees);
+  }
 
-  function pathFrom(pricePctUsed, adPctUsed) {
+  function pathFrom(pricePctUsed, adPctUsed, offlinePctUsed) {
     const priceUsed = Math.max(0, Math.min(priceLever.capPct, pricePctUsed));
     const adUsed = Math.max(0, Math.min(adSearchCapPct, adPctUsed));
+    const offlineUsed = Math.max(0, Math.min(offlineSearchCapPct, offlinePctUsed || 0));
     // priceContribution is the same rupee figure for either goal (pure
-    // margin). adRevContribution / adProfitContribution are BOTH exposed
+    // margin). adRevContribution / adProfitContribution and
+    // offlineRevContribution / offlineProfitContribution are ALL exposed
     // (not just whichever the active goal needs) so the monthly breakdown
     // below can show achieved revenue AND achieved profit regardless of
     // which mode is toggled, same as the "always show both" convention
@@ -2519,35 +2570,50 @@ function computeGoalPaths(p) {
     const adSpendRupees = adSpendRupeesAt(adUsed);
     const adProfitContribution = marginKnown ? (adRevContribution * p.totalMarginPct - adSpendRupees) : null;
     const adMetricContribution = p.goalType === "revenue" ? adRevContribution : (adProfitContribution || 0);
-    const achievedRupees = priceContribution + adMetricContribution;
+    const offlineRevContribution = offlineRevenueAt(offlineUsed);
+    const offlineProfitContribution = marginKnown
+      ? (offlineRevContribution * p.totalMarginPct - offlineRevContribution * (p.offlineCommissionPct / 100)) : null;
+    const offlineMetricContribution = p.goalType === "revenue" ? offlineRevContribution : (offlineProfitContribution || 0);
+    const achievedRupees = priceContribution + adMetricContribution + offlineMetricContribution;
     const achievedPct = baselineMetricNextQ ? (achievedRupees / baselineMetricNextQ) * 100 : 0;
     return {
-      priceUsedPct: priceUsed, adUsedPct: adUsed, adSpendRupees, priceContribution,
-      adRevContribution, adProfitContribution, adMetricContribution, achievedRupees, achievedPct,
+      priceUsedPct: priceUsed, adUsedPct: adUsed, offlineUsedPct: offlineUsed, adSpendRupees, priceContribution,
+      adRevContribution, adProfitContribution, adMetricContribution,
+      offlineRevContribution, offlineProfitContribution, offlineMetricContribution,
+      achievedRupees, achievedPct,
     };
   }
 
   const paths = [];
   if (reachable && targetRupees > 0) {
-    // Price-led: use only as much price as needed; top up with ad spend.
+    // Price-led: use only as much price as needed; close any remaining gap
+    // with offline first (also linear, no diminishing returns -- the
+    // "simple" lever alongside price), then ad for whatever's left (the
+    // one curved, diminishing-returns lever, left to absorb the remainder).
     const priceOnlyNeededPct = p.baselineRevenueNextQ > 0 ? (targetRupees / p.baselineRevenueNextQ) * 100 : Infinity;
     const priceLedPriceUsed = Math.min(priceLever.capPct, priceOnlyNeededPct);
-    const priceLedGap = Math.max(0, targetRupees - priceMetricAt(priceLedPriceUsed));
-    paths.push({ name: "Price-led", ...pathFrom(priceLedPriceUsed, adPctForGap(priceLedGap)) });
+    const priceLedGap1 = Math.max(0, targetRupees - priceMetricAt(priceLedPriceUsed));
+    const priceLedOfflineUsed = offlinePctForGap(priceLedGap1);
+    const priceLedGap2 = Math.max(0, priceLedGap1 - offlineMetricAt(priceLedOfflineUsed));
+    paths.push({ name: "Price-led", ...pathFrom(priceLedPriceUsed, adPctForGap(priceLedGap2), priceLedOfflineUsed) });
 
-    // Ad-led: use only as much ad spend as needed; top up with price.
+    // Ad-led: use only as much ad spend as needed; top up with price, then
+    // offline for whatever's still left.
     const adLedAdUsed = adPctForGap(targetRupees);
-    const adLedGap = Math.max(0, targetRupees - adMetricAt(adLedAdUsed));
-    const adLedPricePct = p.baselineRevenueNextQ > 0 ? Math.min(priceLever.capPct, (adLedGap / p.baselineRevenueNextQ) * 100) : 0;
-    paths.push({ name: "Ad-led", ...pathFrom(adLedPricePct, adLedAdUsed) });
+    const adLedGap1 = Math.max(0, targetRupees - adMetricAt(adLedAdUsed));
+    const adLedPricePct = p.baselineRevenueNextQ > 0 ? Math.min(priceLever.capPct, (adLedGap1 / p.baselineRevenueNextQ) * 100) : 0;
+    const adLedGap2 = Math.max(0, adLedGap1 - priceMetricAt(adLedPricePct));
+    const adLedOfflineUsed = offlinePctForGap(adLedGap2);
+    paths.push({ name: "Ad-led", ...pathFrom(adLedPricePct, adLedAdUsed, adLedOfflineUsed) });
 
     // Balanced: the same fraction of each lever's own (useful) cap.
     const f = maxReachableRupees > 0 ? Math.min(1, targetRupees / maxReachableRupees) : 0;
-    paths.push({ name: "Balanced", ...pathFrom(priceLever.capPct * f, adSearchCapPct * f) });
+    paths.push({ name: "Balanced", ...pathFrom(priceLever.capPct * f, adSearchCapPct * f, offlineSearchCapPct * f) });
   }
 
   return {
     baselineMetricNextQ, targetRupees, targetPct: p.targetPct, priceLever, adLever, adSearchCapPct,
+    offlineLever, offlineSearchCapPct,
     maxReachableRupees, maxReachablePct, reachable, bindingLimit, paths,
   };
 }
@@ -2600,6 +2666,25 @@ function renderGoalPlanner(container, ctx) {
     adRoasBase = adBaselineSpend > 0 ? adBaselineRevenue / adBaselineSpend : NaN;
   }
   const adUsable = adAvailable && isFinite(adRoasBase);
+
+  // Offline-distribution lever's own baseline: revenue from the recent
+  // quarter (last 3 calendar months of Transactions -- there's no separate
+  // "offline sales" file, so this anchors to the same calendar Production
+  // Plan uses below) attributed to rows with NO marketing channel mapped.
+  // That's the closest honest reading of "offline/workshop/retail revenue"
+  // this data model supports: sales not tied to a tracked paid-marketing
+  // channel. If a business tags in-store/retail sales with their OWN
+  // channel value instead of leaving it blank, this won't capture them --
+  // there's no dedicated "offline" column to read instead, and the card
+  // below says so.
+  const offlineDataAvailable = cov.channel;
+  let offlineBaselineRevenue = 0, offlineWindowMonths = [];
+  if (offlineDataAvailable) {
+    const txnMonthsForOffline = Array.from(new Set(ctx.txns.map(t => t.month))).sort();
+    offlineWindowMonths = txnMonthsForOffline.slice(-3);
+    offlineBaselineRevenue = sum(ctx.txns.filter(t => !t.channel && offlineWindowMonths.includes(t.month)), Engine.netRevenue);
+  }
+  const offlineUsable = offlineDataAvailable && offlineBaselineRevenue > 0;
 
   // Production Plan prep -- per-SKU units, computed ONCE here (doesn't
   // depend on the Inputs card below), from the recent quarter of the
@@ -2762,6 +2847,68 @@ function renderGoalPlanner(container, ctx) {
   });
   adFieldsRow.appendChild(declineCol);
 
+  // Offline-distribution lever, visually separated like the ad-spend
+  // lever above -- but LINEAR (no curve, no decline rate), since there's
+  // no measured driver for offline growth in this data at all: both its
+  // inputs are the CEO's own stated assumption, labeled as such.
+  const offlineCard = document.createElement("div");
+  offlineCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px;background:var(--surface);margin-top:12px;";
+  inputsCard.appendChild(offlineCard);
+
+  const offlineHeading = document.createElement("div");
+  offlineHeading.style.cssText = "font-size:11px;font-weight:600;margin-bottom:8px;";
+  offlineHeading.textContent = "Offline Distribution Lever";
+  offlineCard.appendChild(offlineHeading);
+
+  if (!offlineUsable) {
+    const noOffline = document.createElement("p");
+    noOffline.className = "chart-caption"; noOffline.style.margin = "0";
+    noOffline.textContent = !offlineDataAvailable
+      ? "Map a Channel column in Transactions (so offline/unattributed sales can be identified) to unlock this lever -- the price and ad-spend levers above still work without it."
+      : "No unattributed (channel-blank) revenue found in your recent quarter -- nothing to grow from.";
+    offlineCard.appendChild(noOffline);
+  } else {
+    const offlineBaseP = document.createElement("p");
+    offlineBaseP.style.cssText = "font-size:12px;margin:0 0 3px;color:var(--good);";
+    offlineBaseP.textContent = `Offline/unattributed revenue, your recent quarter (${offlineWindowMonths.join(", ")}): ${fmtMoney0(offlineBaselineRevenue)}.`;
+    offlineCard.appendChild(offlineBaseP);
+    const offlineCaveatP = document.createElement("p");
+    offlineCaveatP.style.cssText = "font-size:10.5px;color:var(--ink-muted);margin:0 0 10px;";
+    offlineCaveatP.textContent = "Read from transaction rows with no marketing channel mapped -- if you tag retail/offline sales with their own " +
+      "channel value instead of leaving it blank, this baseline won't include them.";
+    offlineCard.appendChild(offlineCaveatP);
+  }
+
+  const offlineFieldsRow = document.createElement("div");
+  offlineFieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:12px;";
+  offlineCard.appendChild(offlineFieldsRow);
+
+  const offlineCapCol = fieldCol("Grow offline sales by, %");
+  const offlineCapInput = document.createElement("input");
+  offlineCapInput.type = "number"; offlineCapInput.min = "0"; offlineCapInput.step = "0.5"; offlineCapInput.value = String(inputs.offlineCapPct);
+  offlineCapInput.disabled = !offlineUsable;
+  offlineCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  offlineCapInput.addEventListener("input", () => { inputs.offlineCapPct = Math.max(0, Number(offlineCapInput.value) || 0); recompute(); });
+  offlineCapCol.appendChild(offlineCapInput);
+  offlineCapCol.appendChild(provenanceNote("Your assumption -- no measured driver for offline growth exists in this data.", true));
+  offlineFieldsRow.appendChild(offlineCapCol);
+
+  const offlineCommissionCol = fieldCol("Offline channel margin / commission, %");
+  const offlineCommissionInput = document.createElement("input");
+  offlineCommissionInput.type = "number"; offlineCommissionInput.min = "0"; offlineCommissionInput.max = "100"; offlineCommissionInput.step = "0.5";
+  offlineCommissionInput.value = String(inputs.offlineCommissionPct);
+  offlineCommissionInput.disabled = !offlineUsable;
+  offlineCommissionInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  offlineCommissionInput.addEventListener("input", () => {
+    inputs.offlineCommissionPct = Math.max(0, Math.min(100, Number(offlineCommissionInput.value) || 0));
+    recompute();
+  });
+  offlineCommissionCol.appendChild(offlineCommissionInput);
+  offlineCommissionCol.appendChild(provenanceNote(
+    "The % the offline channel keeps -- your input. Charged on the FULL extra revenue, as a cost on top of COGS (not deducted before your " +
+    "product margin applies).", true));
+  offlineFieldsRow.appendChild(offlineCommissionCol);
+
   const outputDiv = document.createElement("div");
   outputDiv.style.marginTop = "16px";
   wrap.appendChild(outputDiv);
@@ -2777,6 +2924,8 @@ function renderGoalPlanner(container, ctx) {
       priceCapPct: inputs.priceCapPct,
       adSpendCapPct: inputs.adSpendCapPct, adAvailable: adUsable,
       adBaselineSpend, adRoasBase, adDeclineRatePct: inputs.declineRatePct,
+      offlineAvailable: offlineUsable, offlineBaselineRevenue,
+      offlineCapPct: inputs.offlineCapPct, offlineCommissionPct: inputs.offlineCommissionPct,
     });
     // Macro Stress Test: the SAME combined cost-shock % External Cost
     // Sensitivity computes from the CEO's own factor rows (never
@@ -2813,6 +2962,12 @@ function renderGoalPlanner(container, ctx) {
       noAdOut.textContent = result.adLever.note;
       outputDiv.appendChild(noAdOut);
     }
+    if (!result.offlineLever.available && result.offlineLever.note) {
+      const noOfflineOut = document.createElement("p");
+      noOfflineOut.className = "chart-caption";
+      noOfflineOut.textContent = result.offlineLever.note;
+      outputDiv.appendChild(noOfflineOut);
+    }
 
     // Diagnostic only -- NOT what any path recommends: what ad-driven
     // profit would be if the FULL cap were spent with no optimization,
@@ -2837,11 +2992,12 @@ function renderGoalPlanner(container, ctx) {
     if (!result.reachable) {
       const failBox = document.createElement("div");
       failBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:14px;background:#fff6ea;font-size:13px;line-height:1.5;";
-      const bindingName = result.bindingLimit === "ad" ? "the ad-spend cap" : "the price cap";
+      const bindingName = result.bindingLimit === "ad" ? "the ad-spend cap"
+        : result.bindingLimit === "offline" ? "the offline growth cap" : "the price cap";
       failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
-        `The most you can reach next quarter is <strong>+${result.maxReachablePct.toFixed(1)}%</strong>, using both levers ` +
+        `The most you can reach next quarter is <strong>+${result.maxReachablePct.toFixed(1)}%</strong>, using all your levers ` +
         `fully -- short of your <strong>+${inputs.targetPct.toFixed(1)}%</strong> target. ` +
-        `The binding limit is <strong>${bindingName}</strong> (it earns more per percentage point of cap than the other lever) -- ` +
+        `The binding limit is <strong>${bindingName}</strong> (it earns more per percentage point of cap than the other levers) -- ` +
         `to go further, raise that cap.`;
       outputDiv.appendChild(failBox);
       return;
@@ -2856,27 +3012,42 @@ function renderGoalPlanner(container, ctx) {
       outputDiv.appendChild(ceilNote);
     }
 
+    // Offline's own useful-cap note -- only fires in Profit mode, and only
+    // when the channel's commission % eats more than the product's own
+    // gross margin, so growing offline sales further would destroy profit
+    // per extra rupee even though revenue would keep rising.
+    if (result.offlineLever.available && result.offlineSearchCapPct < inputs.offlineCapPct - 1e-6) {
+      const offlineCeilNote = document.createElement("p");
+      offlineCeilNote.style.cssText = "font-size:11px;color:#8a5a00;margin:0 0 10px;";
+      offlineCeilNote.textContent = `Note: your offline channel's ${inputs.offlineCommissionPct.toFixed(1)}% commission exceeds your ` +
+        `${fmtPct1(ctx.marginPct)} gross margin, so growing offline sales LOSES profit per extra rupee -- paths below never use the offline ` +
+        `lever in Profit mode here (revenue mode is unaffected).`;
+      outputDiv.appendChild(offlineCeilNote);
+    }
+
     const rows = result.paths.map(pth => `
       <tr>
         <td>${pth.name}</td>
         <td class="num">${pth.priceUsedPct.toFixed(1)}%</td>
         <td class="num">${pth.adUsedPct.toFixed(1)}%${result.adLever.available && pth.adUsedPct > 0 ? ` (${fmtMoney0(pth.adSpendRupees)})` : ""}</td>
+        <td class="num">${pth.offlineUsedPct.toFixed(1)}%${result.offlineLever.available && pth.offlineUsedPct > 0 ? ` (+${fmtMoney0(pth.offlineRevContribution)})` : ""}</td>
         <td class="num" style="background:#eafaf0;">${(pth.achievedPct >= 0 ? "+" : "") + pth.achievedPct.toFixed(1)}%</td>
         <td class="num" style="background:#eafaf0;">${fmtMoney0(pth.achievedRupees)}</td>
       </tr>`).join("");
     const table = document.createElement("table");
     table.className = "data-table";
     table.innerHTML = `<thead><tr><th>Path</th><th>Price increase used (≤ cap)</th><th>Ad-spend increase used (≤ cap)</th>` +
-      `<th>Achieved growth %</th><th>Achieved ₹</th></tr></thead><tbody>${rows}</tbody>`;
+      `<th>Offline growth used (≤ cap)</th><th>Achieved growth %</th><th>Achieved ₹</th></tr></thead><tbody>${rows}</tbody>`;
     outputDiv.appendChild(table);
 
     const note = document.createElement("p");
     note.className = "chart-caption";
     note.style.marginTop = "10px";
-    note.textContent = "\"Price increase used\" and \"Ad-spend increase used\" are each path's lever moves, never exceeding the caps you set " +
-      "above. \"Achieved\" columns are recomputed independently from those exact moves (including the ad lever's diminishing returns), not " +
-      "assumed equal to your target. Price is a scenario that assumes demand holds; the ad-spend lever's ROAS is measured but whole-business " +
-      "blended, and its decline rate is an editable assumption, never fitted to your data.";
+    note.textContent = "\"Price increase used,\" \"Ad-spend increase used,\" and \"Offline growth used\" are each path's lever moves, never " +
+      "exceeding the caps you set above. \"Achieved\" columns are recomputed independently from those exact moves (including the ad lever's " +
+      "diminishing returns), not assumed equal to your target. Price is a scenario that assumes demand holds; the ad-spend lever's ROAS is " +
+      "measured but whole-business blended, and its decline rate is an editable assumption, never fitted to your data; the offline lever is " +
+      "entirely your own assumption -- there is no measured driver for offline growth in this data.";
     outputDiv.appendChild(note);
 
     // Monthly split -- an ADDITION beneath the quarter totals above, never
@@ -2899,8 +3070,9 @@ function renderGoalPlanner(container, ctx) {
     const monthlySub = document.createElement("p");
     monthlySub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;";
     monthlySub.textContent = "Baselines come straight from the Demand Forecast panel above (same Seasonality Source, including any \"I'll " +
-      "set it\" adjustments). Price is applied per month to that month's own sales; ad-spend effect is computed on the quarter, then shown " +
-      "split across months in proportion to each month's baseline -- never recomputed with a monthly ROAS this data can't support.";
+      "set it\" adjustments). Price is applied per month to that month's own sales; ad-spend and offline effects are each computed on the " +
+      "quarter, then shown split across months in proportion to each month's baseline -- neither is recomputed with a monthly driver this " +
+      "data can't support.";
     outputDiv.appendChild(monthlySub);
 
     const monthlyBase = seasonalBaseline.perMonth;
@@ -2917,9 +3089,11 @@ function renderGoalPlanner(container, ctx) {
         const priceContribution = m.value * (pth.priceUsedPct / 100);
         const adRev = pth.adRevContribution * share;
         const adProfit = pth.adProfitContribution != null ? pth.adProfitContribution * share : null;
+        const offlineRev = pth.offlineRevContribution * share;
+        const offlineProfit = pth.offlineProfitContribution != null ? pth.offlineProfitContribution * share : null;
         const targetShare = result.targetRupees * share;
-        const achievedRevenue = priceContribution + adRev;
-        const achievedProfit = adProfit != null ? priceContribution + adProfit : null;
+        const achievedRevenue = priceContribution + adRev + offlineRev;
+        const achievedProfit = (adProfit != null && offlineProfit != null) ? priceContribution + adProfit + offlineProfit : null;
         // Macro stress test at the month level: same mechanism as the
         // quarter-level one below -- raise this month's plan cost by
         // costShockPct, revenue unchanged, recompute profit, then express
@@ -2935,7 +3109,8 @@ function renderGoalPlanner(container, ctx) {
         }
         monthlyData.push({
           pathName: pth.name, month: m.month, monthLabel: `${monthName(m.month)} ${m.month.split("-")[0]}`,
-          baseline: m.value, targetShare, priceContribution, adRev, adProfit, achievedRevenue, achievedProfit, stressedAchievedProfit,
+          baseline: m.value, targetShare, priceContribution, adRev, adProfit, offlineRev, offlineProfit,
+          achievedRevenue, achievedProfit, stressedAchievedProfit,
         });
       });
     });
@@ -2974,8 +3149,8 @@ function renderGoalPlanner(container, ctx) {
 
     const legendRow = document.createElement("div");
     legendRow.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--ink-secondary);margin-bottom:6px;";
-    const barColors = { baseline: COLORS.sequentialBlue[1], price: COLORS.categorical[2], ad: COLORS.categorical[3] };
-    [["baseline", "Baseline (revenue)"], ["price", "Price lever"], ["ad", "Ad-spend lever (quarter-split)"]].forEach(([key, label]) => {
+    const barColors = { baseline: COLORS.sequentialBlue[1], price: COLORS.categorical[2], ad: COLORS.categorical[3], offline: COLORS.categorical[4] };
+    [["baseline", "Baseline (revenue)"], ["price", "Price lever"], ["ad", "Ad-spend lever (quarter-split)"], ["offline", "Offline lever (quarter-split)"]].forEach(([key, label]) => {
       const item = document.createElement("span");
       item.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
       item.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${barColors[key]};"></span>${label}`;
@@ -2995,16 +3170,17 @@ function renderGoalPlanner(container, ctx) {
       const rows = monthlyBase.map((m, i) => monthlyData.find(d => d.pathName === pathName && d.month === m.month));
       const cats = rows.map(r => r.monthLabel);
       const useProfit = inputs.goalType === "profit";
-      const levers = rows.map(r => useProfit ? { price: Math.max(0, r.priceContribution), ad: Math.max(0, r.adProfit || 0) }
-                                              : { price: Math.max(0, r.priceContribution), ad: Math.max(0, r.adRev) });
-      const totals = rows.map((r, i) => r.baseline + levers[i].price + levers[i].ad);
+      const levers = rows.map(r => useProfit
+        ? { price: Math.max(0, r.priceContribution), ad: Math.max(0, r.adProfit || 0), offline: Math.max(0, r.offlineProfit || 0) }
+        : { price: Math.max(0, r.priceContribution), ad: Math.max(0, r.adRev), offline: Math.max(0, r.offlineRev) });
+      const totals = rows.map((r, i) => r.baseline + levers[i].price + levers[i].ad + levers[i].offline);
       const targetTicks = rows.map(r => r.baseline + r.targetShare);
       const yMax = Math.max(...totals, ...targetTicks, 1) * 1.12;
       const frame = drawVFrame(chartSvg, { yMin: 0, yMax, yFormat: commas, xCategories: cats, marginB: 28 });
       rows.forEach((r, i) => {
         const x = frame.xScale(cats[i]), w = frame.xScale.bandwidth;
         let cum = 0;
-        [["baseline", r.baseline], ["price", levers[i].price], ["ad", levers[i].ad]].forEach(([key, val]) => {
+        [["baseline", r.baseline], ["price", levers[i].price], ["ad", levers[i].ad], ["offline", levers[i].offline]].forEach(([key, val]) => {
           const yTop = frame.yScale(cum + val), yBottom = frame.yScale(cum);
           const h = Math.max(0, yBottom - yTop);
           if (h > 0) chartSvg.appendChild(se("rect", { x, y: yTop, width: w, height: h, fill: barColors[key] }));
@@ -3021,9 +3197,9 @@ function renderGoalPlanner(container, ctx) {
     const chartNote = document.createElement("p");
     chartNote.className = "chart-caption";
     chartNote.style.margin = "2px 0 12px;";
-    chartNote.textContent = "Each bar's total height = that month's baseline + the selected path's price and ad-spend contributions for the " +
-      "active Goal type -- the same numbers as the table below, never recomputed. The dashed line marks baseline + that month's target share; " +
-      "the bar reaching or passing it means the levers close that month's share of the target.";
+    chartNote.textContent = "Each bar's total height = that month's baseline + the selected path's price, ad-spend, and offline " +
+      "contributions for the active Goal type -- the same numbers as the table below, never recomputed. The dashed line marks baseline + " +
+      "that month's target share; the bar reaching or passing it means the levers close that month's share of the target.";
     outputDiv.appendChild(chartNote);
 
     const showStressColumn = Math.abs(costShockPct) > 1e-9;
@@ -3038,12 +3214,13 @@ function renderGoalPlanner(container, ctx) {
         <td class="num">${fmtMoney0(d.targetShare)}</td>
         <td class="num">${fmtMoney0(d.priceContribution)}</td>
         <td class="num">${fmtMoney0(d.adRev)}</td>
+        <td class="num">${fmtMoney0(d.offlineRev)}</td>
         <td class="num" style="background:#eafaf0;">${fmtMoney0(d.achievedRevenue)}</td>
         <td class="num" style="background:#eafaf0;">${d.achievedProfit != null ? fmtMoney0(d.achievedProfit) : "–"}</td>` +
         (showStressColumn ? `<td class="num" style="background:#fdf1e3;">${d.stressedAchievedProfit != null ? fmtMoney0(d.stressedAchievedProfit) : "–"}</td>` : "") +
       `</tr>`);
     monthlyTable.innerHTML = `<thead><tr><th>Path</th><th>Month</th><th>Baseline (revenue)</th><th>Target share</th>` +
-      `<th>Price lever</th><th>Ad-spend lever (quarter-split)</th><th>Achieved revenue</th><th>Achieved profit</th>` +
+      `<th>Price lever</th><th>Ad-spend lever (quarter-split)</th><th>Offline lever (quarter-split)</th><th>Achieved revenue</th><th>Achieved profit</th>` +
       (showStressColumn ? `<th>Achieved profit (stressed)</th>` : "") +
       `</tr></thead><tbody>${monthlyRows.join("")}</tbody>`;
     outputDiv.appendChild(monthlyTable);
@@ -3051,9 +3228,9 @@ function renderGoalPlanner(container, ctx) {
     const monthlyNote = document.createElement("p");
     monthlyNote.className = "chart-caption";
     monthlyNote.style.marginTop = "8px";
-    monthlyNote.textContent = "Each path's monthly Target share, Price lever, Ad-spend lever, Achieved revenue, and Achieved profit columns " +
-      "sum exactly to that path's quarter figures above (baselines sum to the quarter's total forecast revenue). \"Achieved profit\" reads " +
-      "\"–\" when Cost isn't mapped, same as the quarter total." +
+    monthlyNote.textContent = "Each path's monthly Target share, Price lever, Ad-spend lever, Offline lever, Achieved revenue, and Achieved " +
+      "profit columns sum exactly to that path's quarter figures above (baselines sum to the quarter's total forecast revenue). \"Achieved " +
+      "profit\" reads \"–\" when Cost isn't mapped, same as the quarter total." +
       (showStressColumn ? " \"Achieved profit (stressed)\" is explained in Macro Stress Test below." : "");
     outputDiv.appendChild(monthlyNote);
 
@@ -3085,9 +3262,9 @@ function renderGoalPlanner(container, ctx) {
       function drawStressLine(pathName) {
         const pth = result.paths.find(p => p.name === pathName) || result.paths[0];
         const baselineProfitNextQ = baselineRevenueNextQ * ctx.marginPct;
-        const achievedProfitQuarter = pth.priceContribution + (pth.adProfitContribution || 0);
+        const achievedProfitQuarter = pth.priceContribution + (pth.adProfitContribution || 0) + (pth.offlineProfitContribution || 0);
         const primaryProfit = baselineProfitNextQ + achievedProfitQuarter;
-        const revenueUnderPlan = baselineRevenueNextQ + pth.priceContribution + pth.adRevContribution;
+        const revenueUnderPlan = baselineRevenueNextQ + pth.priceContribution + pth.adRevContribution + pth.offlineRevContribution;
         const costUnderPlan = revenueUnderPlan - primaryProfit;
         const stressedProfit = primaryProfit - costShockPct * costUnderPlan;
         stressLine.innerHTML = `Under your external-cost scenario (<strong>${fmtPct1(costShockPct)}</strong> higher costs), the ` +
@@ -3119,11 +3296,11 @@ function renderGoalPlanner(container, ctx) {
     } else {
       const planSub = document.createElement("p");
       planSub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;";
-      planSub.textContent = `Only the ad-spend lever needs extra units -- it sells more. The price lever's growth is the same units at a ` +
-        `higher price, so it needs none. Extra units = the selected path's ad-driven revenue increase ÷ your blended average selling ` +
-        `price (${fmtMoney0(blendedASP)}, from ${fmtMoney0(totalCurrentRevenue)} revenue over ${commas(Math.round(totalCurrentUnits))} units ` +
-        `in your most recent quarter, ${recentQuarterMonths.map(monthName).join("/")}). Current units below are that same recent quarter, ` +
-        `per SKU.`;
+      planSub.textContent = `Only the ad-spend and offline levers need extra units -- they sell more. The price lever's growth is the same ` +
+        `units at a higher price, so it needs none. Extra units = (the selected path's ad-driven + offline-driven revenue increase) ÷ your ` +
+        `blended average selling price (${fmtMoney0(blendedASP)}, from ${fmtMoney0(totalCurrentRevenue)} revenue over ` +
+        `${commas(Math.round(totalCurrentUnits))} units in your most recent quarter, ${recentQuarterMonths.map(monthName).join("/")}). ` +
+        `Current units below are that same recent quarter, per SKU.`;
       outputDiv.appendChild(planSub);
 
       const planControls = document.createElement("div");
@@ -3165,14 +3342,15 @@ function renderGoalPlanner(container, ctx) {
       function drawProductionPlan(pathName, method) {
         const pth = result.paths.find(p => p.name === pathName) || result.paths[0];
         const adDrivenIncrease = Math.max(0, pth.adRevContribution || 0);
-        const totalExtraUnits = blendedASP > 0 ? adDrivenIncrease / blendedASP : 0;
+        const offlineDrivenIncrease = Math.max(0, pth.offlineRevContribution || 0);
+        const totalExtraUnits = blendedASP > 0 ? (adDrivenIncrease + offlineDrivenIncrease) / blendedASP : 0;
 
         planTotalLine.textContent = `Total extra units to produce (${pathName} path): ${commas(Math.round(totalExtraUnits))}`;
 
         if (totalExtraUnits <= 0) {
           planZeroNote.style.display = "";
-          planZeroNote.textContent = "The selected path's ad-spend lever isn't driving any revenue growth (0% ad-spend increase used, or no " +
-            "ad-spend cap set), so no extra production is needed -- every SKU stays at its current recent-quarter units.";
+          planZeroNote.textContent = "The selected path's ad-spend and offline levers aren't driving any revenue growth (0% used, or no cap " +
+            "set for either), so no extra production is needed -- every SKU stays at its current recent-quarter units.";
         } else {
           planZeroNote.style.display = "none";
         }

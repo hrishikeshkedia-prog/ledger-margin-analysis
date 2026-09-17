@@ -815,7 +815,11 @@ function buildMarketing(rawRows, mapping) {
     // Normalized to "YYYY-MM" (see normMonthKey) so this always matches
     // Transactions' month keys regardless of how this file spells its
     // dates (a bare "2026-05" and a full "2026-05-01" are the same month).
-    out.push({ month: mapping.month ? normMonthKey(r[mapping.month]) : "all", channel, spend });
+    // null (not a fake "all" sentinel) when Month isn't mapped at all --
+    // a sentinel string would "match itself" in every filter that compares
+    // month keys, silently producing a meaningless single-bucket window
+    // instead of an honest "no month data" signal.
+    out.push({ month: mapping.month ? normMonthKey(r[mapping.month]) : null, channel, spend });
   });
   return out;
 }
@@ -2458,7 +2462,7 @@ function computeGoalPaths(p) {
     adLever = {
       capPct: p.adSpendCapPct, available: false,
       maxRevenueContributionRupees: 0, maxProfitContributionRupees: marginKnown ? 0 : null,
-      note: !p.adAvailable ? "Add a Marketing Spend file (Month, Channel, Spend) to unlock the ad-spend lever -- the price lever still works without it." : null,
+      note: !p.adAvailable ? (p.adUnavailableReason || "Add a Marketing Spend file (Month, Channel, Spend) to unlock the ad-spend lever -- the price lever still works without it.") : null,
     };
   }
 
@@ -2649,23 +2653,47 @@ function renderGoalPlanner(container, ctx) {
   // last 3 months of the Marketing Spend file's OWN calendar (never
   // Transactions'), both sides run through normMonthKey() so a file using
   // full dates ("2026-05-01") still matches Transactions' canonical
-  // "YYYY-MM" keys and revenue is never wrongly read as 0.
+  // "YYYY-MM" keys. Month is an OPTIONAL column on the Marketing Spend
+  // file (see MKT_ROLES) -- buildMarketing() gives every row month: null
+  // when it isn't mapped, rather than a fake sentinel that would silently
+  // "match itself" and produce a meaningless window. Revenue is ALWAYS
+  // computed from Transactions for the SAME months spend is drawn from --
+  // never ctx.netRevenue as a blanket stand-in, since that would compare
+  // spend from one window against revenue from a possibly-unrelated one
+  // and call the result a ROAS.
   const adAvailable = ctx.mkt.length > 0;
+  const mktMonthMapped = adAvailable && ctx.mkt.some(m => m.month !== null);
   let adBaselineSpend = 0, adBaselineRevenue = 0, adRoasBase = NaN, adWindowLabel = "", adLastQuarterMonths = [];
-  if (adAvailable) {
+  if (adAvailable && mktMonthMapped) {
     const mktMonths = Array.from(new Set(ctx.mkt.map(m => normMonthKey(m.month)))).sort();
     adLastQuarterMonths = mktMonths.slice(-3);
     adBaselineSpend = sum(ctx.mkt.filter(m => adLastQuarterMonths.includes(normMonthKey(m.month))), m => m.spend);
     adBaselineRevenue = sum(ctx.revenueTrend.filter(r => adLastQuarterMonths.includes(normMonthKey(r.month))), r => r.netRevenue);
     adWindowLabel = `your Marketing Spend file's last 3 months (${adLastQuarterMonths.join(", ")})`;
     if (!(adBaselineSpend > 0)) {
+      adLastQuarterMonths = mktMonths;
       adBaselineSpend = sum(ctx.mkt, m => m.spend);
-      adBaselineRevenue = ctx.netRevenue;
+      adBaselineRevenue = sum(ctx.revenueTrend.filter(r => adLastQuarterMonths.includes(normMonthKey(r.month))), r => r.netRevenue);
       adWindowLabel = "your full loaded window (the recent quarter in your Marketing Spend file has no spend)";
     }
     adRoasBase = adBaselineSpend > 0 ? adBaselineRevenue / adBaselineSpend : NaN;
   }
-  const adUsable = adAvailable && isFinite(adRoasBase);
+  // GUARD: a ROAS of 0 (or non-finite) is never treated as valid -- it
+  // means either no spend was found, or spend was found but no
+  // Transactions revenue overlaps those same months, not that ads earn
+  // nothing. Either way the lever is disabled with a specific, honest
+  // reason rather than silently computing with a worthless ROAS.
+  const adUsable = adAvailable && mktMonthMapped && adBaselineSpend > 0 && isFinite(adRoasBase) && adRoasBase > 0;
+  let adUnavailableReason = null;
+  if (!adAvailable) {
+    adUnavailableReason = "Add a Marketing Spend file (Month, Channel, Spend) to unlock this lever -- the price lever above still works without it.";
+  } else if (!mktMonthMapped) {
+    adUnavailableReason = "Map a Month column in your Marketing Spend file to unlock this lever -- a recent-quarter spend window can't be measured without one.";
+  } else if (!(adBaselineSpend > 0)) {
+    adUnavailableReason = "No ad spend recorded in your data -- nothing to model from.";
+  } else if (!adUsable) {
+    adUnavailableReason = "Ad-spend lever needs BOTH a Marketing Spend file AND transactions revenue loaded. Transactions revenue not detected.";
+  }
 
   // Offline-distribution lever's own baseline: revenue from the recent
   // quarter (last 3 calendar months of Transactions -- there's no separate
@@ -2784,9 +2812,7 @@ function renderGoalPlanner(container, ctx) {
   if (!adUsable) {
     const noAd = document.createElement("p");
     noAd.className = "chart-caption"; noAd.style.margin = "0";
-    noAd.textContent = !adAvailable
-      ? "Add a Marketing Spend file (Month, Channel, Spend) to unlock this lever -- the price lever above still works without it."
-      : "No ad spend recorded in your data -- nothing to model from.";
+    noAd.textContent = adUnavailableReason;
     adCard.appendChild(noAd);
   } else {
     const roasP = document.createElement("p");
@@ -2824,9 +2850,12 @@ function renderGoalPlanner(container, ctx) {
     `fitted to your data automatically.`, true));
   const declineZeroWarning = document.createElement("div");
   declineZeroWarning.style.cssText = "font-size:10.5px;margin-top:3px;color:var(--critical);font-weight:600;display:none;";
-  declineZeroWarning.textContent = "0 = no diminishing returns -- profit will rise indefinitely with spend, which is unrealistic.";
+  declineZeroWarning.textContent = "0 (or near 0) = effectively no diminishing returns -- profit will rise almost indefinitely with spend, which is unrealistic.";
   declineCol.appendChild(declineZeroWarning);
-  function updateDeclineZeroWarning() { declineZeroWarning.style.display = inputs.declineRatePct === 0 ? "" : "none"; }
+  // Guards against 0 exactly AND effectively-zero values a CEO could type
+  // to route around the diminishing-returns check (e.g. 0.00001) without
+  // technically entering 0 -- the curve behaves the same way either way.
+  function updateDeclineZeroWarning() { declineZeroWarning.style.display = inputs.declineRatePct < 0.05 ? "" : "none"; }
   updateDeclineZeroWarning();
   // Blank clears to the anchored default, NEVER to 0 -- an empty field
   // silently read as 0 would mean "no diminishing returns," letting
@@ -2922,7 +2951,7 @@ function renderGoalPlanner(container, ctx) {
       goalType: inputs.goalType, targetPct: inputs.targetPct,
       baselineRevenueNextQ, totalMarginPct: ctx.marginPct,
       priceCapPct: inputs.priceCapPct,
-      adSpendCapPct: inputs.adSpendCapPct, adAvailable: adUsable,
+      adSpendCapPct: inputs.adSpendCapPct, adAvailable: adUsable, adUnavailableReason,
       adBaselineSpend, adRoasBase, adDeclineRatePct: inputs.declineRatePct,
       offlineAvailable: offlineUsable, offlineBaselineRevenue,
       offlineCapPct: inputs.offlineCapPct, offlineCommissionPct: inputs.offlineCommissionPct,

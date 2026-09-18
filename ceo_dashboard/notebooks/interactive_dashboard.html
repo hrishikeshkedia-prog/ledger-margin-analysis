@@ -1976,12 +1976,31 @@ let lastRenderedCtx = null;
 // CEO already set instead of silently reverting to hardcoded defaults --
 // the Monthly Stack chart in particular depends on goalType surviving a
 // seasonality edit to keep showing the metric the CEO actually selected.
+// Single source of truth for every Goal Planner numeric field's default --
+// referenced both by goalPlannerInputs' own initializer below and by each
+// field's bindClampedInput() call, so "revert to default on a blank field"
+// can never drift out of sync with the actual starting value.
+const GOAL_PLANNER_DEFAULTS = { targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, offlineCapPct: 0, offlineCommissionPct: 15 };
 let goalPlannerInputs = {
-  goalType: "revenue", targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, declineRatePct: CONFIG.adDeclineDefaultPct,
-  // Offline lever defaults to 0% growth so a freshly loaded plan is
-  // untouched by it -- opt-in, not a silent third lever added under you.
-  offlineCapPct: 0, offlineCommissionPct: 15,
+  goalType: "revenue", ...GOAL_PLANNER_DEFAULTS, declineRatePct: CONFIG.adDeclineDefaultPct,
 };
+// Shared input-binding for every Goal Planner numeric field: a blank or
+// unparseable value reverts to the field's own sensible default (never
+// silently 0 -- an empty Target field read as 0 used to crash the whole
+// panel, since computeGoalPaths() left `paths` empty whenever
+// targetRupees <= 0 and downstream code assumed it never was). Whatever
+// value the engine actually ends up using (after clamping to [min, max])
+// is written back into the field, so the display never shows a number
+// the model isn't using.
+function bindClampedInput(inputEl, defaultVal, min, max, onChange) {
+  inputEl.addEventListener("input", () => {
+    const raw = inputEl.value.trim();
+    const parsed = Number(raw);
+    const value = (raw === "" || !isFinite(parsed)) ? defaultVal : Math.max(min, Math.min(max, parsed));
+    if (String(value) !== inputEl.value) inputEl.value = String(value);
+    onChange(value);
+  });
+}
 // Only refreshes the Goal Planner -- the Forecast panel manages its own
 // seasonality-source block in place (see renderSeasonalitySourceBlock)
 // specifically so typing into a "% change" field never gets its own input
@@ -2403,6 +2422,12 @@ function renderForecast(container, ctx) {
 // ceiling; 1/marginPct for a profit ceiling; -Infinity to never stop, used
 // by the goal-seek's own unrestricted evaluators below).
 function computeAdSpendCurve(baselineSpend, roasBase, magnitudePct, declineRatePct, roasFloor) {
+  // Clamped to a sane range -- beyond 100, "1 - decline/100" goes negative
+  // and its magnitude can exceed 1, so instead of decaying toward 0 each
+  // step it OSCILLATES and GROWS across steps, overflowing to Infinity/NaN
+  // within ~80 steps. 0-100 covers every economically meaningful case
+  // (100 = marginal ROAS hits 0 after the very first step).
+  const declineClamped = Math.max(0, Math.min(100, declineRatePct));
   const stepRupees = baselineSpend / 100;
   const mag = Math.max(0, magnitudePct);
   const fullSteps = Math.floor(mag);
@@ -2411,7 +2436,7 @@ function computeAdSpendCurve(baselineSpend, roasBase, magnitudePct, declineRateP
   let cumulativeSpend = 0, cumulativeRevenue = 0, stoppedEarly = false, stopAtPct = null;
 
   function applyStep(pct, decaySteps) {
-    const marginalRoas = roasBase * Math.pow(1 - declineRatePct / 100, decaySteps);
+    const marginalRoas = roasBase * Math.pow(1 - declineClamped / 100, decaySteps);
     if (marginalRoas <= roasFloor) return false;
     const spendThisStep = stepRupees * pct;
     const revenueThisStep = spendThisStep * marginalRoas;
@@ -2504,7 +2529,14 @@ function computeGoalPaths(p) {
   const pricePerPoint = priceLever.capPct > 0 ? priceLever.maxContributionRupees / priceLever.capPct : 0;
   const adPerPoint = (adLever.available && adLever.capPct > 0) ? adMaxContribution / adLever.capPct : 0;
   const offlinePerPoint = (offlineLever.available && offlineLever.capPct > 0) ? offlineMaxContribution / offlineLever.capPct : 0;
+  // When every lever's cap is 0 (or otherwise earns literally nothing per
+  // point), none of them is "the" binding limit -- naming one anyway (the
+  // old >= tie-break always defaulted to "offline") falsely implies it
+  // would have earned more than the others, when none of them can earn
+  // anything at all.
+  const allLeversZeroPerPoint = pricePerPoint === 0 && adPerPoint === 0 && offlinePerPoint === 0;
   const bindingLimit = reachable ? null
+    : allLeversZeroPerPoint ? "none"
     : (offlinePerPoint >= adPerPoint && offlinePerPoint >= pricePerPoint) ? "offline"
     : (adPerPoint > pricePerPoint) ? "ad" : "price";
 
@@ -2588,37 +2620,54 @@ function computeGoalPaths(p) {
     };
   }
 
+  // A loss month (or no baseline data at all) makes "% growth on the
+  // baseline" meaningless -- nothing below this point (targetRupees, the
+  // gap-closing searches, the monthly split) can be trusted, so the
+  // caller shows a plain refusal instead of a plan.
+  const baselineInvalid = !(p.baselineRevenueNextQ > 0);
+  // Target at or below 0% isn't "unreachable" (that label implies the
+  // caps are too small) -- there's simply nothing to grow toward. Every
+  // lever sits at 0% by construction, which keeps monthlyData/the paths
+  // table/Monthly Stack chart/Production Plan all fed with real (if flat)
+  // numbers instead of an empty array they used to crash on.
+  const noGrowthPlan = !baselineInvalid && targetRupees <= 0;
+
   const paths = [];
-  if (reachable && targetRupees > 0) {
-    // Price-led: use only as much price as needed; close any remaining gap
-    // with offline first (also linear, no diminishing returns -- the
-    // "simple" lever alongside price), then ad for whatever's left (the
-    // one curved, diminishing-returns lever, left to absorb the remainder).
-    const priceOnlyNeededPct = p.baselineRevenueNextQ > 0 ? (targetRupees / p.baselineRevenueNextQ) * 100 : Infinity;
-    const priceLedPriceUsed = Math.min(priceLever.capPct, priceOnlyNeededPct);
-    const priceLedGap1 = Math.max(0, targetRupees - priceMetricAt(priceLedPriceUsed));
-    const priceLedOfflineUsed = offlinePctForGap(priceLedGap1);
-    const priceLedGap2 = Math.max(0, priceLedGap1 - offlineMetricAt(priceLedOfflineUsed));
-    paths.push({ name: "Price-led", ...pathFrom(priceLedPriceUsed, adPctForGap(priceLedGap2), priceLedOfflineUsed) });
+  if (!baselineInvalid) {
+    if (reachable && targetRupees > 0) {
+      // Price-led: use only as much price as needed; close any remaining gap
+      // with offline first (also linear, no diminishing returns -- the
+      // "simple" lever alongside price), then ad for whatever's left (the
+      // one curved, diminishing-returns lever, left to absorb the remainder).
+      const priceOnlyNeededPct = p.baselineRevenueNextQ > 0 ? (targetRupees / p.baselineRevenueNextQ) * 100 : Infinity;
+      const priceLedPriceUsed = Math.min(priceLever.capPct, priceOnlyNeededPct);
+      const priceLedGap1 = Math.max(0, targetRupees - priceMetricAt(priceLedPriceUsed));
+      const priceLedOfflineUsed = offlinePctForGap(priceLedGap1);
+      const priceLedGap2 = Math.max(0, priceLedGap1 - offlineMetricAt(priceLedOfflineUsed));
+      paths.push({ name: "Price-led", ...pathFrom(priceLedPriceUsed, adPctForGap(priceLedGap2), priceLedOfflineUsed) });
 
-    // Ad-led: use only as much ad spend as needed; top up with price, then
-    // offline for whatever's still left.
-    const adLedAdUsed = adPctForGap(targetRupees);
-    const adLedGap1 = Math.max(0, targetRupees - adMetricAt(adLedAdUsed));
-    const adLedPricePct = p.baselineRevenueNextQ > 0 ? Math.min(priceLever.capPct, (adLedGap1 / p.baselineRevenueNextQ) * 100) : 0;
-    const adLedGap2 = Math.max(0, adLedGap1 - priceMetricAt(adLedPricePct));
-    const adLedOfflineUsed = offlinePctForGap(adLedGap2);
-    paths.push({ name: "Ad-led", ...pathFrom(adLedPricePct, adLedAdUsed, adLedOfflineUsed) });
+      // Ad-led: use only as much ad spend as needed; top up with price, then
+      // offline for whatever's still left.
+      const adLedAdUsed = adPctForGap(targetRupees);
+      const adLedGap1 = Math.max(0, targetRupees - adMetricAt(adLedAdUsed));
+      const adLedPricePct = p.baselineRevenueNextQ > 0 ? Math.min(priceLever.capPct, (adLedGap1 / p.baselineRevenueNextQ) * 100) : 0;
+      const adLedGap2 = Math.max(0, adLedGap1 - priceMetricAt(adLedPricePct));
+      const adLedOfflineUsed = offlinePctForGap(adLedGap2);
+      paths.push({ name: "Ad-led", ...pathFrom(adLedPricePct, adLedAdUsed, adLedOfflineUsed) });
 
-    // Balanced: the same fraction of each lever's own (useful) cap.
-    const f = maxReachableRupees > 0 ? Math.min(1, targetRupees / maxReachableRupees) : 0;
-    paths.push({ name: "Balanced", ...pathFrom(priceLever.capPct * f, adSearchCapPct * f, offlineSearchCapPct * f) });
+      // Balanced: the same fraction of each lever's own (useful) cap.
+      const f = maxReachableRupees > 0 ? Math.min(1, targetRupees / maxReachableRupees) : 0;
+      paths.push({ name: "Balanced", ...pathFrom(priceLever.capPct * f, adSearchCapPct * f, offlineSearchCapPct * f) });
+    } else if (noGrowthPlan) {
+      ["Price-led", "Ad-led", "Balanced"].forEach(name => paths.push({ name, ...pathFrom(0, 0, 0) }));
+    }
   }
 
   return {
     baselineMetricNextQ, targetRupees, targetPct: p.targetPct, priceLever, adLever, adSearchCapPct,
     offlineLever, offlineSearchCapPct,
     maxReachableRupees, maxReachablePct, reachable, bindingLimit, paths,
+    baselineInvalid, noGrowthPlan,
   };
 }
 
@@ -2691,6 +2740,8 @@ function renderGoalPlanner(container, ctx) {
     adUnavailableReason = "Map a Month column in your Marketing Spend file to unlock this lever -- a recent-quarter spend window can't be measured without one.";
   } else if (!(adBaselineSpend > 0)) {
     adUnavailableReason = "No ad spend recorded in your data -- nothing to model from.";
+  } else if (!adUsable && adBaselineRevenue < 0) {
+    adUnavailableReason = "Transactions revenue is negative in this window, so ROAS can't be computed.";
   } else if (!adUsable) {
     adUnavailableReason = "Ad-spend lever needs BOTH a Marketing Spend file AND transactions revenue loaded. Transactions revenue not detected.";
   }
@@ -2785,7 +2836,7 @@ function renderGoalPlanner(container, ctx) {
   const targetInput = document.createElement("input");
   targetInput.type = "number"; targetInput.step = "0.5"; targetInput.value = String(inputs.targetPct);
   targetInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  targetInput.addEventListener("input", () => { inputs.targetPct = Number(targetInput.value) || 0; recompute(); });
+  bindClampedInput(targetInput, GOAL_PLANNER_DEFAULTS.targetPct, -Infinity, Infinity, v => { inputs.targetPct = v; recompute(); });
   targetCol.appendChild(targetInput);
   fieldsRow.appendChild(targetCol);
 
@@ -2793,7 +2844,7 @@ function renderGoalPlanner(container, ctx) {
   const priceCapInput = document.createElement("input");
   priceCapInput.type = "number"; priceCapInput.min = "0"; priceCapInput.step = "0.5"; priceCapInput.value = String(inputs.priceCapPct);
   priceCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  priceCapInput.addEventListener("input", () => { inputs.priceCapPct = Math.max(0, Number(priceCapInput.value) || 0); recompute(); });
+  bindClampedInput(priceCapInput, GOAL_PLANNER_DEFAULTS.priceCapPct, 0, Infinity, v => { inputs.priceCapPct = v; recompute(); });
   priceCapCol.appendChild(priceCapInput);
   priceCapCol.appendChild(provenanceNote("Assumption: assumes demand holds -- real price elasticity is not modeled.", true));
   fieldsRow.appendChild(priceCapCol);
@@ -2836,7 +2887,7 @@ function renderGoalPlanner(container, ctx) {
   adCapInput.type = "number"; adCapInput.min = "0"; adCapInput.step = "0.5"; adCapInput.value = String(inputs.adSpendCapPct);
   adCapInput.disabled = !adUsable;
   adCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  adCapInput.addEventListener("input", () => { inputs.adSpendCapPct = Math.max(0, Number(adCapInput.value) || 0); recompute(); });
+  bindClampedInput(adCapInput, GOAL_PLANNER_DEFAULTS.adSpendCapPct, 0, Infinity, v => { inputs.adSpendCapPct = v; recompute(); });
   adCapCol.appendChild(adCapInput);
   adFieldsRow.appendChild(adCapCol);
 
@@ -2862,15 +2913,13 @@ function renderGoalPlanner(container, ctx) {
   // profit rise without limit, which is the exact bug this guards
   // against. An explicit "0" is a deliberate choice, kept as 0 but flagged
   // above so it's never mistaken for a default.
-  declineInput.addEventListener("input", () => {
-    const raw = declineInput.value.trim();
-    const parsed = Number(raw);
-    if (raw === "" || !isFinite(parsed)) {
-      inputs.declineRatePct = CONFIG.adDeclineDefaultPct;
-      declineInput.value = String(CONFIG.adDeclineDefaultPct);
-    } else {
-      inputs.declineRatePct = Math.max(0, parsed);
-    }
+  // Clamped to [0, 100] -- beyond 100 the underlying curve's decay base
+  // goes negative with magnitude > 1, which explodes into Infinity/NaN
+  // instead of decaying (see computeAdSpendCurve's own clamp, kept here
+  // too so the displayed field never shows a value the engine wouldn't
+  // actually use).
+  bindClampedInput(declineInput, CONFIG.adDeclineDefaultPct, 0, 100, v => {
+    inputs.declineRatePct = v;
     updateDeclineZeroWarning();
     recompute();
   });
@@ -2917,7 +2966,7 @@ function renderGoalPlanner(container, ctx) {
   offlineCapInput.type = "number"; offlineCapInput.min = "0"; offlineCapInput.step = "0.5"; offlineCapInput.value = String(inputs.offlineCapPct);
   offlineCapInput.disabled = !offlineUsable;
   offlineCapInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  offlineCapInput.addEventListener("input", () => { inputs.offlineCapPct = Math.max(0, Number(offlineCapInput.value) || 0); recompute(); });
+  bindClampedInput(offlineCapInput, GOAL_PLANNER_DEFAULTS.offlineCapPct, 0, Infinity, v => { inputs.offlineCapPct = v; recompute(); });
   offlineCapCol.appendChild(offlineCapInput);
   offlineCapCol.appendChild(provenanceNote("Your assumption -- no measured driver for offline growth exists in this data.", true));
   offlineFieldsRow.appendChild(offlineCapCol);
@@ -2928,10 +2977,7 @@ function renderGoalPlanner(container, ctx) {
   offlineCommissionInput.value = String(inputs.offlineCommissionPct);
   offlineCommissionInput.disabled = !offlineUsable;
   offlineCommissionInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-  offlineCommissionInput.addEventListener("input", () => {
-    inputs.offlineCommissionPct = Math.max(0, Math.min(100, Number(offlineCommissionInput.value) || 0));
-    recompute();
-  });
+  bindClampedInput(offlineCommissionInput, GOAL_PLANNER_DEFAULTS.offlineCommissionPct, 0, 100, v => { inputs.offlineCommissionPct = v; recompute(); });
   offlineCommissionCol.appendChild(offlineCommissionInput);
   offlineCommissionCol.appendChild(provenanceNote(
     "The % the offline channel keeps -- your input. Charged on the FULL extra revenue, as a cost on top of COGS (not deducted before your " +
@@ -2964,6 +3010,14 @@ function renderGoalPlanner(container, ctx) {
 
     outputDiv.innerHTML = "";
 
+    if (result.baselineInvalid) {
+      const invalidBox = document.createElement("div");
+      invalidBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:14px;background:#fff6ea;font-size:13px;line-height:1.5;";
+      invalidBox.textContent = "Baseline revenue is zero or negative, cannot compute a growth plan.";
+      outputDiv.appendChild(invalidBox);
+      return;
+    }
+
     const outputsHeading = document.createElement("div");
     outputsHeading.style.cssText = "font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--ink-muted);margin-bottom:8px;";
     outputsHeading.textContent = "Outputs -- computed separately from your caps above";
@@ -2975,6 +3029,21 @@ function renderGoalPlanner(container, ctx) {
     tilesRow.appendChild(tile("Target", fmtMoney0(result.targetRupees)));
     tilesRow.appendChild(tile("Max reachable within your caps", (result.maxReachablePct >= 0 ? "+" : "") + result.maxReachablePct.toFixed(1) + "%", !result.reachable));
     outputDiv.appendChild(tilesRow);
+
+    if (result.noGrowthPlan) {
+      const noGrowthNote = document.createElement("p");
+      noGrowthNote.className = "chart-caption";
+      noGrowthNote.style.cssText += "margin:0 0 10px;";
+      noGrowthNote.textContent = "Target is 0% or less -- showing a no-growth plan.";
+      outputDiv.appendChild(noGrowthNote);
+    }
+
+    if (Math.abs(result.maxReachablePct) > 1000) {
+      const absurdNote = document.createElement("p");
+      absurdNote.style.cssText = "font-size:11px;color:#8a5a00;margin:0 0 10px;";
+      absurdNote.textContent = "These inputs are outside a realistic business range -- treat as a hypothetical.";
+      outputDiv.appendChild(absurdNote);
+    }
 
     if (inputs.goalType === "profit" && adUsable) {
       const roasCaveat = document.createElement("p");
@@ -3009,25 +3078,36 @@ function renderGoalPlanner(container, ctx) {
     if (inputs.goalType === "profit" && adUsable && inputs.adSpendCapPct > 0) {
       const rawCurve = computeAdSpendCurve(adBaselineSpend, adRoasBase, inputs.adSpendCapPct, inputs.declineRatePct, -Infinity);
       const rawProfit = rawCurve.revenueRupees * ctx.marginPct - rawCurve.spendRupees;
+      const rawFinite = isFinite(rawProfit) && isFinite(rawCurve.revenueRupees) && isFinite(rawCurve.spendRupees);
       const rawP = document.createElement("p");
-      rawP.style.cssText = `font-size:11px;margin:0 0 10px;color:${rawProfit < 0 ? "var(--critical)" : "var(--ink-muted)"};`;
-      rawP.textContent = `Diagnostic, not a recommendation: spending your FULL +${inputs.adSpendCapPct.toFixed(1)}% ad-spend cap with no ` +
-        `optimization would net ${fmtMoney0(rawProfit)} in ad-driven profit (${fmtMoney0(rawCurve.revenueRupees)} revenue − ` +
-        `${fmtMoney0(rawCurve.spendRupees)} spend) -- ${rawProfit < 0 ? "already negative" : "still positive"} at this decline rate. ` +
-        `Paths below never spend past where this turns negative.`;
+      rawP.style.cssText = `font-size:11px;margin:0 0 10px;color:${!rawFinite ? "var(--critical)" : rawProfit < 0 ? "var(--critical)" : "var(--ink-muted)"};`;
+      rawP.textContent = !rawFinite
+        ? `Diagnostic, not a recommendation: spending your FULL +${inputs.adSpendCapPct.toFixed(1)}% ad-spend cap at this decline rate ` +
+          `produces input out of range -- the underlying curve did not resolve to a usable number. Paths below never spend past where this turns negative.`
+        : `Diagnostic, not a recommendation: spending your FULL +${inputs.adSpendCapPct.toFixed(1)}% ad-spend cap with no ` +
+          `optimization would net ${fmtMoney0(rawProfit)} in ad-driven profit (${fmtMoney0(rawCurve.revenueRupees)} revenue − ` +
+          `${fmtMoney0(rawCurve.spendRupees)} spend) -- ${rawProfit < 0 ? "already negative" : "still positive"} at this decline rate. ` +
+          `Paths below never spend past where this turns negative.`;
       outputDiv.appendChild(rawP);
     }
 
     if (!result.reachable) {
       const failBox = document.createElement("div");
       failBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:14px;background:#fff6ea;font-size:13px;line-height:1.5;";
-      const bindingName = result.bindingLimit === "ad" ? "the ad-spend cap"
-        : result.bindingLimit === "offline" ? "the offline growth cap" : "the price cap";
-      failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
-        `The most you can reach next quarter is <strong>+${result.maxReachablePct.toFixed(1)}%</strong>, using all your levers ` +
-        `fully -- short of your <strong>+${inputs.targetPct.toFixed(1)}%</strong> target. ` +
-        `The binding limit is <strong>${bindingName}</strong> (it earns more per percentage point of cap than the other levers) -- ` +
-        `to go further, raise that cap.`;
+      if (result.bindingLimit === "none") {
+        failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
+          `The most you can reach next quarter is <strong>+${result.maxReachablePct.toFixed(1)}%</strong> -- short of your ` +
+          `<strong>+${inputs.targetPct.toFixed(1)}%</strong> target. Every lever cap is set to 0, so nothing is reachable -- ` +
+          `raise at least one cap above 0 to make progress.`;
+      } else {
+        const bindingName = result.bindingLimit === "ad" ? "the ad-spend cap"
+          : result.bindingLimit === "offline" ? "the offline growth cap" : "the price cap";
+        failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
+          `The most you can reach next quarter is <strong>+${result.maxReachablePct.toFixed(1)}%</strong>, using all your levers ` +
+          `fully -- short of your <strong>+${inputs.targetPct.toFixed(1)}%</strong> target. ` +
+          `The binding limit is <strong>${bindingName}</strong> (it earns more per percentage point of cap than the other levers) -- ` +
+          `to go further, raise that cap.`;
+      }
       outputDiv.appendChild(failBox);
       return;
     }
@@ -3197,6 +3277,10 @@ function renderGoalPlanner(container, ctx) {
     function drawMonthlyStack(pathName) {
       chartSvg.innerHTML = "";
       const rows = monthlyBase.map((m, i) => monthlyData.find(d => d.pathName === pathName && d.month === m.month));
+      // Belt-and-suspenders: computeGoalPaths() should never hand back an
+      // empty/mismatched paths array now, but if it ever does, show nothing
+      // rather than crash on a missing row's .monthLabel.
+      if (rows.length === 0 || rows.some(r => !r)) return;
       const cats = rows.map(r => r.monthLabel);
       const useProfit = inputs.goalType === "profit";
       const levers = rows.map(r => useProfit

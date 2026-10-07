@@ -73,6 +73,10 @@ table.data-table th { text-align: left; background: #f0efec; padding: 10px 12px;
 table.data-table td { padding: 9px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; }
 table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.data-table tbody tr:last-child td { border-bottom: none; }
+table.data-table-col-sep th, table.data-table-col-sep td { border-right: 1px solid var(--grid); }
+table.data-table-col-sep th:last-child, table.data-table-col-sep td:last-child { border-right: none; }
+table.data-table-col-sep td { border-bottom: 1px solid var(--ink-muted); }
+table.data-table-col-sep tbody tr:last-child td { border-bottom: none; }
 .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
   white-space: nowrap; }
 .badge-critical { background: #fbeaea; color: var(--critical); }
@@ -1578,11 +1582,12 @@ function tile(label, value, warn) {
   t.appendChild(l); t.appendChild(v);
   return t;
 }
-function fieldCol(labelText) {
+function fieldCol(labelText, infoText) {
   const w = document.createElement("div");
   const l = document.createElement("label");
   l.style.cssText = "font-size:11px;color:var(--ink-muted);display:block;margin-bottom:3px;";
-  l.textContent = labelText;
+  l.appendChild(document.createTextNode(labelText));
+  if (infoText) l.appendChild(infoIcon(infoText));
   w.appendChild(l);
   return w;
 }
@@ -1817,7 +1822,7 @@ function renderMarginBySku(container, ctx) {
       <td class="num">${fmtMoney0(revenueFor(r))}</td>
     </tr>`);
   const table = document.createElement("table");
-  table.className = "data-table";
+  table.className = "data-table data-table-col-sep";
   table.style.fontSize = "13px";
   table.innerHTML = `<thead><tr><th>Product</th><th id="sku-margin-th">Margin</th><th>Revenue</th></tr></thead>` +
     `<tbody>${rowsHtml.join("")}</tbody>`;
@@ -2891,9 +2896,10 @@ function renderGoalPlanner(container, ctx) {
   adCapCol.appendChild(adCapInput);
   adFieldsRow.appendChild(adCapCol);
 
-  const declineCol = fieldCol("Diminishing-returns decline, %/pt");
+  const declineCol = fieldCol("Diminishing-returns decline, %/pt",
+    "How fast each extra rupee of ad spend earns less. Your return on ad spend (ROAS) drops by this % for every 1 percentage-point increase in ad spend. Higher = ads saturate faster. Default is anchored to your real July data point (~1.85x by +60% spend). 0 = no diminishing returns (unrealistic).");
   const declineInput = document.createElement("input");
-  declineInput.type = "number"; declineInput.min = "0"; declineInput.max = "100"; declineInput.step = "0.1"; declineInput.value = String(inputs.declineRatePct);
+  declineInput.type = "number"; declineInput.min = "0"; declineInput.max = "100"; declineInput.step = "any"; declineInput.value = String(inputs.declineRatePct);
   declineInput.disabled = !adUsable;
   declineInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
   declineCol.appendChild(declineInput);
@@ -3026,7 +3032,7 @@ function renderGoalPlanner(container, ctx) {
     const tilesRow = document.createElement("div");
     tilesRow.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;";
     tilesRow.appendChild(tile(`Baseline next quarter (${inputs.goalType === "revenue" ? "revenue" : "profit"})`, fmtMoney0(result.baselineMetricNextQ)));
-    tilesRow.appendChild(tile("Target", fmtMoney0(result.targetRupees)));
+    tilesRow.appendChild(tile("Target", `${fmtMoney0(result.baselineMetricNextQ + result.targetRupees)} (${result.targetPct >= 0 ? "+" : ""}${result.targetPct.toFixed(1)}%)`));
     tilesRow.appendChild(tile("Max reachable within your caps", (result.maxReachablePct >= 0 ? "+" : "") + result.maxReachablePct.toFixed(1) + "%", !result.reachable));
     outputDiv.appendChild(tilesRow);
 

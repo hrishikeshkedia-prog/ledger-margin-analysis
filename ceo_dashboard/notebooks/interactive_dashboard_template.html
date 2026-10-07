@@ -2028,7 +2028,7 @@ let lastRenderedCtx = null;
 // referenced both by goalPlannerInputs' own initializer below and by each
 // field's bindClampedInput() call, so "revert to default on a blank field"
 // can never drift out of sync with the actual starting value.
-const GOAL_PLANNER_DEFAULTS = { targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, offlineCapPct: 0, offlineCommissionPct: 15 };
+const GOAL_PLANNER_DEFAULTS = { targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, offlineCapPct: 0, offlineCommissionPct: 15, offlineManualBaselineRupees: 0 };
 let goalPlannerInputs = {
   goalType: "revenue", ...GOAL_PLANNER_DEFAULTS, declineRatePct: CONFIG.adDeclineDefaultPct,
 };
@@ -2563,7 +2563,7 @@ function computeGoalPaths(p) {
     capPct: p.offlineCapPct, available: offlineAvailable,
     maxRevenueContributionRupees: offlineAvailable ? p.offlineBaselineRevenue * (p.offlineCapPct / 100) : 0,
     maxProfitContributionRupees: offlineAvailable && marginKnown ? offlineSearchCapPct * offlineMetricPerPointRupees : (marginKnown ? 0 : null),
-    note: !offlineAvailable ? "Add (or map) a Channel column in Transactions, so offline/unattributed sales can be identified, to unlock this lever." : null,
+    note: !offlineAvailable ? "Map a Channel column in Transactions, or enter your offline sales baseline above, to unlock this lever." : null,
   };
 
   const baselineMetricNextQ = p.goalType === "revenue" ? p.baselineRevenueNextQ : p.baselineRevenueNextQ * p.totalMarginPct;
@@ -2721,6 +2721,7 @@ function computeGoalPaths(p) {
 
 function renderGoalPlanner(container, ctx) {
   const { cov } = ctx;
+  const inputs = goalPlannerInputs;
   panelHeader(container, "Goal Planner — Reach a Target Next Quarter", null,
     "A what-if tool: pick a growth target, and see how much price increase and ad spend it would take to reach it.");
 
@@ -2805,13 +2806,34 @@ function renderGoalPlanner(container, ctx) {
   // there's no dedicated "offline" column to read instead, and the card
   // below says so.
   const offlineDataAvailable = cov.channel;
-  let offlineBaselineRevenue = 0, offlineWindowMonths = [];
+  let measuredOfflineBaselineRevenue = 0, offlineWindowMonths = [];
   if (offlineDataAvailable) {
     const txnMonthsForOffline = Array.from(new Set(ctx.txns.map(t => t.month))).sort();
     offlineWindowMonths = txnMonthsForOffline.slice(-3);
-    offlineBaselineRevenue = sum(ctx.txns.filter(t => !t.channel && offlineWindowMonths.includes(t.month)), Engine.netRevenue);
+    measuredOfflineBaselineRevenue = sum(ctx.txns.filter(t => !t.channel && offlineWindowMonths.includes(t.month)), Engine.netRevenue);
   }
-  const offlineUsable = offlineDataAvailable && offlineBaselineRevenue > 0;
+  const offlineMeasuredUsable = offlineDataAvailable && measuredOfflineBaselineRevenue > 0;
+  // With no Channel column at all, there's nothing to measure -- but that
+  // shouldn't permanently lock the lever out, since the CEO may simply know
+  // their own offline/retail sales number without having tagged it in the
+  // data. A typed baseline only ever fills that specific gap: once a
+  // Channel column IS mapped, the measured reading above (even a genuine
+  // zero) is always the truthful one and the typed figure is never used to
+  // override it.
+  // Re-derived (not a one-time const) because it depends on
+  // inputs.offlineManualBaselineRupees, which changes live as the CEO
+  // types -- recompute() calls this again on every keystroke so the cap/
+  // commission fields' enabled state and the plan itself never lag behind
+  // what's actually in the box.
+  function deriveOfflineUsable() {
+    const manualUsable = !offlineDataAvailable && inputs.offlineManualBaselineRupees > 0;
+    return {
+      manualUsable,
+      usable: offlineMeasuredUsable || manualUsable,
+      baselineRevenue: offlineMeasuredUsable ? measuredOfflineBaselineRevenue : (manualUsable ? inputs.offlineManualBaselineRupees : 0),
+    };
+  }
+  let { manualUsable: offlineManualUsable, usable: offlineUsable, baselineRevenue: offlineBaselineRevenue } = deriveOfflineUsable();
 
   // Production Plan prep -- per-SKU units, computed ONCE here (doesn't
   // depend on the Inputs card below), from the recent quarter of the
@@ -2841,8 +2863,6 @@ function renderGoalPlanner(container, ctx) {
   baselineP.style.cssText = `font-size:12px;margin:0 0 12px;color:${baselineIsForecast ? "var(--good)" : "#8a5a00"};`;
   baselineP.textContent = baselineNote;
   wrap.appendChild(baselineP);
-
-  const inputs = goalPlannerInputs;
 
   const inputsCard = document.createElement("div");
   inputsCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--page);";
@@ -2987,23 +3007,55 @@ function renderGoalPlanner(container, ctx) {
   offlineHeading.textContent = "Offline Distribution Lever";
   offlineCard.appendChild(offlineHeading);
 
-  if (!offlineUsable) {
-    const noOffline = document.createElement("p");
-    noOffline.className = "chart-caption"; noOffline.style.margin = "0";
-    noOffline.textContent = !offlineDataAvailable
-      ? "Map a Channel column in Transactions (so offline/unattributed sales can be identified) to unlock this lever -- the price and ad-spend levers above still work without it."
-      : "No unattributed (channel-blank) revenue found in your recent quarter -- nothing to grow from.";
-    offlineCard.appendChild(noOffline);
-  } else {
+  // Referenced (when not null) inside recompute() to keep this message in
+  // sync as the manual baseline field changes, without rebuilding the
+  // whole panel and dropping focus out of the field the CEO is typing in.
+  let manualBaselineUsingP = null;
+
+  if (offlineMeasuredUsable) {
     const offlineBaseP = document.createElement("p");
     offlineBaseP.style.cssText = "font-size:12px;margin:0 0 3px;color:var(--good);";
-    offlineBaseP.textContent = `Offline/unattributed revenue, your recent quarter (${offlineWindowMonths.join(", ")}): ${fmtMoney0(offlineBaselineRevenue)}.`;
+    offlineBaseP.textContent = `Offline/unattributed revenue, your recent quarter (${offlineWindowMonths.join(", ")}): ` +
+      `${fmtMoney0(offlineBaselineRevenue)} -- using your channel data.`;
     offlineCard.appendChild(offlineBaseP);
     const offlineCaveatP = document.createElement("p");
     offlineCaveatP.style.cssText = "font-size:10.5px;color:var(--ink-muted);margin:0 0 10px;";
     offlineCaveatP.textContent = "Read from transaction rows with no marketing channel mapped -- if you tag retail/offline sales with their own " +
       "channel value instead of leaving it blank, this baseline won't include them.";
     offlineCard.appendChild(offlineCaveatP);
+  } else if (!offlineDataAvailable) {
+    // No Channel column at all -- the measured path above can't run, but
+    // the CEO may still know their own offline/retail number without ever
+    // having tagged it in the data. A typed baseline fills exactly that
+    // gap; the moment a Channel column IS mapped, this input stops being
+    // used at all (see offlineManualUsable above) in favor of the measured
+    // reading, even if that reading turns out to be a genuine zero.
+    const noChannelP = document.createElement("p");
+    noChannelP.className = "chart-caption"; noChannelP.style.margin = "0 0 8px";
+    noChannelP.textContent = "No channel column in your data, so enter your offline sales baseline to use this lever -- your assumption.";
+    offlineCard.appendChild(noChannelP);
+
+    const manualBaselineCol = fieldCol("Current offline sales (quarterly), Rs");
+    const manualBaselineInput = document.createElement("input");
+    manualBaselineInput.type = "number"; manualBaselineInput.min = "0"; manualBaselineInput.step = "any";
+    manualBaselineInput.value = String(inputs.offlineManualBaselineRupees);
+    manualBaselineInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;margin-bottom:8px;";
+    bindClampedInput(manualBaselineInput, GOAL_PLANNER_DEFAULTS.offlineManualBaselineRupees, 0, Infinity, v => { inputs.offlineManualBaselineRupees = v; recompute(); });
+    manualBaselineCol.appendChild(manualBaselineInput);
+    offlineCard.appendChild(manualBaselineCol);
+
+    manualBaselineUsingP = document.createElement("p");
+    manualBaselineUsingP.style.cssText = "font-size:10.5px;color:var(--ink-muted);margin:0 0 10px;";
+    manualBaselineUsingP.style.display = offlineManualUsable ? "" : "none";
+    if (offlineManualUsable) {
+      manualBaselineUsingP.textContent = `Using ${fmtMoney0(inputs.offlineManualBaselineRupees)} as your quarterly offline baseline -- your assumption, not measured from your data.`;
+    }
+    offlineCard.appendChild(manualBaselineUsingP);
+  } else {
+    const noOffline = document.createElement("p");
+    noOffline.className = "chart-caption"; noOffline.style.margin = "0";
+    noOffline.textContent = "No unattributed (channel-blank) revenue found in your recent quarter -- nothing to grow from.";
+    offlineCard.appendChild(noOffline);
   }
 
   const offlineFieldsRow = document.createElement("div");
@@ -3041,6 +3093,20 @@ function renderGoalPlanner(container, ctx) {
     goalModeNote.textContent = inputs.goalType === "revenue"
       ? "Revenue mode: measured against your forecasted next-quarter revenue."
       : `Profit mode: baseline profit = forecasted revenue × your MEASURED overall gross margin (${fmtPct1(ctx.marginPct)}), computed from your real cost data. The ad-spend lever nets its own extra spend out of profit.`;
+
+    // Refresh the offline lever's derived state -- it depends on
+    // inputs.offlineManualBaselineRupees, which may have just changed, so
+    // the cap/commission fields' enabled state and the confirmation note
+    // below must never lag a stale read from the initial render.
+    ({ manualUsable: offlineManualUsable, usable: offlineUsable, baselineRevenue: offlineBaselineRevenue } = deriveOfflineUsable());
+    offlineCapInput.disabled = !offlineUsable;
+    offlineCommissionInput.disabled = !offlineUsable;
+    if (manualBaselineUsingP) {
+      manualBaselineUsingP.style.display = offlineManualUsable ? "" : "none";
+      manualBaselineUsingP.textContent = offlineManualUsable
+        ? `Using ${fmtMoney0(inputs.offlineManualBaselineRupees)} as your quarterly offline baseline -- your assumption, not measured from your data.`
+        : "";
+    }
 
     const result = computeGoalPaths({
       goalType: inputs.goalType, targetPct: inputs.targetPct,

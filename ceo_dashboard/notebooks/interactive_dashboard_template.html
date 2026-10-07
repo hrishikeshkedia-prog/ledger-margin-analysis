@@ -1599,7 +1599,7 @@ function provenanceNote(text, isAssumption) {
 }
 
 function renderScorecard(container, ctx) {
-  const { revenueTrend, marginAbs, marginPct, returnsBridge, concentration, deadStock, cac, cov, isDefault } = ctx;
+  const { revenueTrend, marginAbs, marginPct, returnsBridge, concentration, deadStock, cac, cov, isDefault, mkt } = ctx;
   const netRevenue = sum(revenueTrend, r => r.netRevenue);
 
   // Same returns-aware labeling as the Trend panel: without a mapped
@@ -1616,6 +1616,31 @@ function renderScorecard(container, ctx) {
   if (cov.cost) {
     tiles.push(["Gross Margin %", fmtPct1(marginPct), false, "Revenue minus cost of goods, as a % of revenue -- before ad spend."]);
     tiles.push(["Gross Margin (window)", fmtCr(marginAbs), false, "Total gross margin (revenue minus cost of goods) earned in the loaded date range."]);
+
+    // CM1 = Net Revenue - COGS -- identical formula to Gross Margin above
+    // (this engine has no other direct-cost layer), so the two are expected
+    // to show the same number. Shown as its own tile anyway since CM1/CM2
+    // are the CEO-facing contribution-margin framing the Goal Planner and
+    // SKU table also use.
+    const cm1InfoText = "Revenue minus cost of goods. With no other direct costs loaded, this equals gross margin.";
+    tiles.push(["CM1 %", fmtPct1(marginPct), false, cm1InfoText]);
+    tiles.push(["CM1 (window)", fmtCr(marginAbs), false, cm1InfoText]);
+
+    // CM2 = CM1 - advertising spend, whole-business only -- ad spend has no
+    // per-product attribution in this engine, so CM2 never gets a per-SKU
+    // breakdown (see the SKU table, which stops at CM1).
+    const cm2InfoText = "CM1 minus advertising spend (whole-business). Company-level only -- ad spend can't be split per product.";
+    if (cov.marketing) {
+      const totalAdSpend = sum(mkt, m => m.spend);
+      const cm2Abs = marginAbs - totalAdSpend;
+      const cm2Pct = netRevenue ? cm2Abs / netRevenue : 0;
+      tiles.push(["CM2 %", fmtPct1(cm2Pct), cm2Abs < 0, cm2InfoText]);
+      tiles.push(["CM2 (window)", fmtCr(cm2Abs), cm2Abs < 0, cm2InfoText]);
+    } else {
+      const cm2Placeholder = "Load a Marketing Spend file to compute CM2.";
+      tiles.push(["CM2 %", cm2Placeholder, false, cm2InfoText]);
+      tiles.push(["CM2 (window)", cm2Placeholder, false, cm2InfoText]);
+    }
   }
   if (cov.sku) {
     tiles.push([`Top 10 Concentration`, fmtPct0(concentration.share), false,
@@ -1653,7 +1678,14 @@ function renderScorecard(container, ctx) {
     lbl.appendChild(document.createTextNode(label));
     if (infoText) lbl.appendChild(infoIcon(infoText));
     const val = document.createElement("div");
-    val.style.cssText = `font-size:22px;font-weight:700;color:${warn ? COLORS.status.critical : COLORS.ink.primary};`;
+    // A tile value is normally a short number/percent at 22px bold; a few
+    // tiles (e.g. CM2 with no Marketing Spend file loaded) show a plain-
+    // language placeholder sentence instead, which would overflow the tile
+    // at that size -- drop to a smaller, non-bold size for those instead.
+    const isLongText = typeof value === "string" && value.length > 16 && !/^[-\d]/.test(value);
+    val.style.cssText = isLongText
+      ? `font-size:12px;font-weight:500;line-height:1.3;color:var(--ink-muted);`
+      : `font-size:22px;font-weight:700;color:${warn ? COLORS.status.critical : COLORS.ink.primary};`;
     val.textContent = value;
     tile.appendChild(lbl); tile.appendChild(val);
     grid.appendChild(tile);
@@ -1815,19 +1847,30 @@ function renderMarginBySku(container, ctx) {
     ? "Margin after allocating this product's share of marketing spend -- net of ad cost."
     : "GROSS margin (revenue minus cost of goods) -- NOT net of ad spend.";
 
+  // CM1 = Revenue - COGS per product. COGS is per-product, so this is valid
+  // at SKU granularity -- unlike CM2 (CM1 minus advertising), which has no
+  // per-product attribution and so is never shown in this table. When no
+  // Marketing Spend file is loaded (hasAllocation false), this is the exact
+  // same figure as the Margin column above -- expected, since CM1 IS gross
+  // margin whenever there are no other direct costs.
+  const cm1InfoText = "Revenue minus cost of goods. With no other direct costs loaded, this equals gross margin.";
+  const cm1For = r => hasAllocation ? r.marginTotal : r.marginAbs;
+
   const rowsHtml = sorted.map(r => `
     <tr>
       <td>${r.sku}</td>
       <td class="num"${r[key] < 0 ? ' style="color:var(--critical);font-weight:600;"' : ""}>${fmtMoney0(r[key])}</td>
       <td class="num">${fmtMoney0(revenueFor(r))}</td>
+      <td class="num"${cm1For(r) < 0 ? ' style="color:var(--critical);font-weight:600;"' : ""}>${fmtMoney0(cm1For(r))}</td>
     </tr>`);
   const table = document.createElement("table");
   table.className = "data-table data-table-col-sep";
   table.style.fontSize = "13px";
-  table.innerHTML = `<thead><tr><th>Product</th><th id="sku-margin-th">Margin</th><th>Revenue</th></tr></thead>` +
+  table.innerHTML = `<thead><tr><th>Product</th><th id="sku-margin-th">Margin</th><th>Revenue</th><th id="sku-cm1-th">CM1</th></tr></thead>` +
     `<tbody>${rowsHtml.join("")}</tbody>`;
   container.appendChild(table);
   table.querySelector("#sku-margin-th").appendChild(infoIcon(marginInfoText));
+  table.querySelector("#sku-cm1-th").appendChild(infoIcon(cm1InfoText));
 
   panelCaption(container, `${nLoss} of ${totalSkuCount} products are loss-making${hasAllocation ? " after marketing cost" : ""} (red rows).`);
 }

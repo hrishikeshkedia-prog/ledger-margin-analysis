@@ -2038,7 +2038,10 @@ let lastRenderedCtx = null;
 // referenced both by goalPlannerInputs' own initializer below and by each
 // field's bindClampedInput() call, so "revert to default on a blank field"
 // can never drift out of sync with the actual starting value.
-const GOAL_PLANNER_DEFAULTS = { targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, offlineCapPct: 0, offlineCommissionPct: 15, offlineManualBaselineRupees: 0 };
+const GOAL_PLANNER_DEFAULTS = {
+  targetPct: 8, priceCapPct: 5, adSpendCapPct: 15, offlineCapPct: 0, offlineCommissionPct: 15, offlineManualBaselineRupees: 0,
+  costReductionCapPct: 0, elasticityPerUnit: 0,
+};
 let goalPlannerInputs = {
   goalType: "revenue", ...GOAL_PLANNER_DEFAULTS, declineRatePct: CONFIG.adDeclineDefaultPct,
 };
@@ -2767,6 +2770,137 @@ function computeGoalPaths(p) {
   };
 }
 
+// "Profit per unit" goal type -- CM1/unit = (net revenue - COGS) / units,
+// whole-business and per-SKU. Deliberately a SEPARATE engine from
+// computeGoalPaths() above, never a branch inside it: ad-spend and offline
+// don't apply to this goal at all, its two levers (price, cost reduction)
+// move per-unit profit by a different mechanism than either Revenue or
+// Profit mode, and elasticity only ever moves UNITS sold, never the
+// per-unit profit figure itself (see profitPerUnitAt() below -- it has no
+// elasticity term). Nothing here is read by computeGoalPaths() or
+// renderGoalPlanner()'s Revenue/Profit code path, and vice versa, so this
+// goal type can't regress either of the other two.
+function computeProfitPerUnitPlan(p) {
+  if (!p.dataAvailable) return { dataAvailable: false };
+
+  const { aspBaseline, cogsBaseline, baselineRevenueNextQ, targetPct, priceCapPct, costReductionCapPct,
+    elasticityPerUnit, costShockPct, skuRowsRecent } = p;
+
+  // Baseline profit/unit is just today's measured unit economics (ASP -
+  // unit COGS from the recent actual quarter) -- it does NOT depend on how
+  // much volume next quarter forecasts, by construction: whatever units
+  // get sold, the per-unit margin is assumed to hold. Units themselves
+  // (for reporting total CM1 next quarter) are the one thing that DOES
+  // need next quarter's baseline revenue, derived via the current ASP
+  // since this engine has no seasonality-chained per-month unit forecast
+  // to read instead (see the "Units are derived..." note below).
+  const baselineProfitPerUnit = aspBaseline - cogsBaseline;
+  const unitsBaselineNextQ = aspBaseline > 0 ? baselineRevenueNextQ / aspBaseline : 0;
+  const baselineCM1NextQ = baselineProfitPerUnit * unitsBaselineNextQ;
+
+  const targetDeltaPerUnit = baselineProfitPerUnit * (targetPct / 100);
+  const targetProfitPerUnit = baselineProfitPerUnit + targetDeltaPerUnit;
+
+  // Per-point value of each lever, in Rs of profit/unit per 1 percentage
+  // point of ITS OWN cap -- same convention computeGoalPaths() uses for
+  // its own binding-limit tie-break: a lever whose cap is 0 contributes
+  // nothing, full stop, never "0 because nothing was typed into it yet."
+  const pricePerPoint = priceCapPct > 0 ? aspBaseline / 100 : 0;
+  const costPerPoint = costReductionCapPct > 0 ? cogsBaseline / 100 : 0;
+  const allLeversZero = pricePerPoint === 0 && costPerPoint === 0;
+
+  function profitPerUnitAt(xPct, yPct) {
+    return aspBaseline * (1 + xPct / 100) - cogsBaseline * (1 - yPct / 100);
+  }
+  // Units lost per +1% price -- an assumption, never measured. Floored at
+  // 0 so an extreme elasticity x price combination can't imply negative
+  // units sold.
+  function unitsAt(xPct) {
+    return Math.max(0, unitsBaselineNextQ * (1 - (elasticityPerUnit * xPct) / 100));
+  }
+
+  // Smallest-effort order: price first (the less-assumption-heavy lever --
+  // it moves a MEASURED ASP), then cost reduction (pure assumption,
+  // capped at 0 by default so the CEO must opt in before it counts for
+  // anything).
+  let pricePctUsed = 0, costPctUsed = 0, reachable;
+  if (targetDeltaPerUnit <= 0) {
+    // A flat-or-falling target is already met with zero effort -- same
+    // honesty pattern as Revenue/Profit mode's no-growth plan: "negative
+    // allowed = limit the fall" means the baseline itself (0% change)
+    // already satisfies it.
+    reachable = true;
+  } else {
+    const priceOnlyNeededPct = aspBaseline > 0 ? (targetDeltaPerUnit * 100) / aspBaseline : Infinity;
+    if (priceOnlyNeededPct <= priceCapPct + 1e-9) {
+      pricePctUsed = priceOnlyNeededPct;
+      reachable = true;
+    } else {
+      pricePctUsed = priceCapPct;
+      const remainingDelta = targetDeltaPerUnit - (aspBaseline * pricePctUsed) / 100;
+      const costNeededPct = cogsBaseline > 0 ? (remainingDelta * 100) / cogsBaseline : Infinity;
+      if (costNeededPct <= costReductionCapPct + 1e-9) {
+        costPctUsed = costNeededPct;
+        reachable = true;
+      } else {
+        costPctUsed = costReductionCapPct;
+        reachable = false;
+      }
+    }
+  }
+  const bindingLimit = reachable ? null : allLeversZero ? "none" : (pricePerPoint >= costPerPoint ? "price" : "cost");
+
+  const achievedProfitPerUnit = profitPerUnitAt(pricePctUsed, costPctUsed);
+  const achievedDeltaPerUnit = achievedProfitPerUnit - baselineProfitPerUnit;
+  const achievedPct = baselineProfitPerUnit ? (achievedDeltaPerUnit / baselineProfitPerUnit) * 100 : 0;
+  const newUnitsNextQ = unitsAt(pricePctUsed);
+  const achievedCM1NextQ = achievedProfitPerUnit * newUnitsNextQ;
+
+  const maxReachableProfitPerUnit = profitPerUnitAt(priceCapPct, costReductionCapPct);
+  const maxReachableDeltaPerUnit = maxReachableProfitPerUnit - baselineProfitPerUnit;
+  const maxReachablePct = baselineProfitPerUnit ? (maxReachableDeltaPerUnit / baselineProfitPerUnit) * 100 : 0;
+
+  // Per-SKU: the SAME scalar price%/cost% used uniformly, applied to each
+  // SKU's own real (recent-quarter) ASP and unit COGS -- never re-derived
+  // per SKU, so every row's "before" figure matches the Production Plan's
+  // own current-quarter numbers exactly.
+  const perSku = (skuRowsRecent || []).filter(r => r.unitsSold > 0).map(r => {
+    const aspBefore = r.netRevenue / r.unitsSold;
+    const cogsBefore = r.netCost / r.unitsSold;
+    const profitUnitBefore = aspBefore - cogsBefore;
+    const aspAfter = aspBefore * (1 + pricePctUsed / 100);
+    const cogsAfter = cogsBefore * (1 - costPctUsed / 100);
+    const profitUnitAfter = aspAfter - cogsAfter;
+    return { sku: r.sku, unitsSold: r.unitsSold, aspBefore, cogsBefore, profitUnitBefore, aspAfter, cogsAfter, profitUnitAfter };
+  });
+
+  // Macro offset line -- a SEPARATE fact about the External Cost
+  // Sensitivity scenario, never folded into the baseline or plan above.
+  // Elasticity never enters it: profit/unit math never depends on units
+  // sold (see profitPerUnitAt()), so a price rise's effect on per-unit
+  // profit is exactly the same regardless of the elasticity assumption --
+  // "with your elasticity assumption" in the CEO-facing sentence is a
+  // general caveat about this panel's pricing assumption, not a literal
+  // input to this number.
+  let macroOffset = null;
+  if (Math.abs(costShockPct) > 1e-9) {
+    const shockedProfitPerUnit = aspBaseline - cogsBaseline * (1 + costShockPct);
+    const fallPct = baselineProfitPerUnit ? ((baselineProfitPerUnit - shockedProfitPerUnit) / baselineProfitPerUnit) * 100 : 0;
+    const priceRiseNeededPct = aspBaseline > 0 ? (cogsBaseline * costShockPct * 100) / aspBaseline : Infinity;
+    macroOffset = { zPct: costShockPct * 100, shockedProfitPerUnit, fallPct, priceRiseNeededPct };
+  }
+
+  return {
+    dataAvailable: true,
+    aspBaseline, cogsBaseline, baselineProfitPerUnit, unitsBaselineNextQ, baselineCM1NextQ,
+    targetPct, targetDeltaPerUnit, targetProfitPerUnit,
+    reachable, bindingLimit, maxReachablePct,
+    pricePctUsed, costPctUsed, achievedProfitPerUnit, achievedDeltaPerUnit, achievedPct,
+    newUnitsNextQ, achievedCM1NextQ,
+    perSku, macroOffset,
+  };
+}
+
 function renderGoalPlanner(container, ctx) {
   const { cov } = ctx;
   const inputs = goalPlannerInputs;
@@ -2892,7 +3026,7 @@ function renderGoalPlanner(container, ctx) {
   // gated the same way the Demand Forecast panel gates its own units
   // series (see computeContext's cov.quantity comment above).
   const productionPlanAvailable = cov.sku && cov.quantity;
-  let recentQuarterMonths = [], skuRowsRecent = [], blendedASP = NaN, totalCurrentUnits = 0, totalCurrentRevenue = 0;
+  let recentQuarterMonths = [], skuRowsRecent = [], blendedASP = NaN, totalCurrentUnits = 0, totalCurrentRevenue = 0, totalCurrentCost = 0, blendedUnitCOGS = NaN;
   if (productionPlanAvailable) {
     const txnMonths = Array.from(new Set(ctx.txns.map(t => t.month))).sort();
     recentQuarterMonths = txnMonths.slice(-3);
@@ -2900,8 +3034,20 @@ function renderGoalPlanner(container, ctx) {
     skuRowsRecent = Engine.marginBySku(recentQtrTxns).filter(r => r.unitsSold > 0);
     totalCurrentUnits = sum(skuRowsRecent, r => r.unitsSold);
     totalCurrentRevenue = sum(skuRowsRecent, r => r.netRevenue);
+    totalCurrentCost = sum(skuRowsRecent, r => r.netCost);
     blendedASP = totalCurrentUnits > 0 ? totalCurrentRevenue / totalCurrentUnits : NaN;
+    blendedUnitCOGS = totalCurrentUnits > 0 ? totalCurrentCost / totalCurrentUnits : NaN;
   }
+  // "Profit per unit" goal type needs real per-unit COGS, which needs the
+  // SAME SKU+Quantity mapping the Production Plan does -- plus at least
+  // one unit actually sold in the recent quarter (a mapped-but-empty
+  // Quantity column would otherwise divide by zero into NaN here).
+  const profitPerUnitDataAvailable = productionPlanAvailable && totalCurrentUnits > 0 && isFinite(blendedASP) && isFinite(blendedUnitCOGS);
+  // If the CEO had this goal type selected and the data underneath it
+  // changed (e.g. a re-upload without Quantity mapped), fall back to
+  // Revenue rather than ever trying to render a plan with no units/COGS
+  // to work from.
+  if (inputs.goalType === "profit_per_unit" && !profitPerUnitDataAvailable) inputs.goalType = "revenue";
 
   const wrap = document.createElement("div");
   wrap.style.marginTop = "6px";
@@ -2927,18 +3073,33 @@ function renderGoalPlanner(container, ctx) {
   goalLabel.style.cssText = "font-size:12px;color:var(--ink-muted);";
   goalLabel.textContent = "Goal type:";
   goalTypeRow.appendChild(goalLabel);
-  ["revenue", "profit"].forEach(gt => {
+  const goalTypeLabels = { revenue: "Revenue", profit: "Profit", profit_per_unit: "Profit per unit" };
+  const profitPerUnitRadio = { el: null };
+  ["revenue", "profit", "profit_per_unit"].forEach(gt => {
     const lab = document.createElement("label");
     lab.style.cssText = "font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer;";
     const radio = document.createElement("input");
     radio.type = "radio"; radio.name = "goal-type-radio"; radio.value = gt;
     radio.checked = inputs.goalType === gt;
+    if (gt === "profit_per_unit") {
+      radio.disabled = !profitPerUnitDataAvailable;
+      profitPerUnitRadio.el = radio;
+    }
     radio.addEventListener("change", () => { if (radio.checked) { inputs.goalType = gt; recompute(); } });
     lab.appendChild(radio);
-    lab.appendChild(document.createTextNode(gt === "revenue" ? "Revenue" : "Profit"));
+    lab.appendChild(document.createTextNode(goalTypeLabels[gt]));
     goalTypeRow.appendChild(lab);
   });
   inputsCard.appendChild(goalTypeRow);
+
+  if (!profitPerUnitDataAvailable) {
+    const ppuGateNote = document.createElement("div");
+    ppuGateNote.className = "chart-caption";
+    ppuGateNote.style.cssText = "margin:0 0 8px;";
+    ppuGateNote.textContent = "Profit per unit needs SKU and Quantity columns in Transactions with at least one unit sold in your most " +
+      "recent quarter, so real per-unit COGS can be computed -- the Revenue and Profit goal types above still work without it.";
+    inputsCard.appendChild(ppuGateNote);
+  }
 
   const goalModeNote = document.createElement("div");
   goalModeNote.style.cssText = "font-size:11px;margin:0 0 12px;color:var(--ink-secondary);";
@@ -2949,6 +3110,7 @@ function renderGoalPlanner(container, ctx) {
   inputsCard.appendChild(fieldsRow);
 
   const targetCol = fieldCol("Target growth, next quarter (%)");
+  const targetLabelEl = targetCol.querySelector("label");
   const targetInput = document.createElement("input");
   targetInput.type = "number"; targetInput.step = "0.5"; targetInput.value = String(inputs.targetPct);
   targetInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
@@ -2975,6 +3137,15 @@ function renderGoalPlanner(container, ctx) {
   adHeading.style.cssText = "font-size:11px;font-weight:600;margin-bottom:8px;";
   adHeading.textContent = "Ad-Spend Lever (whole-business)";
   adCard.appendChild(adHeading);
+
+  // Toggled in recompute() -- ad spend simply doesn't apply to the
+  // Profit-per-unit goal (it has no per-unit mechanism, only whole-
+  // business revenue/profit), so this card greys out with an honest
+  // reason instead of silently doing nothing when that mode is active.
+  const adPpuNoteP = document.createElement("p");
+  adPpuNoteP.style.cssText = "font-size:11px;color:#8a5a00;margin:0 0 8px;display:none;";
+  adPpuNoteP.textContent = "Doesn't change profit per unit -- this lever is disabled while that goal type is active.";
+  adCard.appendChild(adPpuNoteP);
 
   if (!adUsable) {
     const noAd = document.createElement("p");
@@ -3055,10 +3226,21 @@ function renderGoalPlanner(container, ctx) {
   offlineHeading.textContent = "Offline Distribution Lever";
   offlineCard.appendChild(offlineHeading);
 
+  // Toggled in recompute() -- same reasoning as adPpuNoteP above: offline
+  // distribution has no per-unit mechanism either, so it's disabled while
+  // Profit per unit is active.
+  const offlinePpuNoteP = document.createElement("p");
+  offlinePpuNoteP.style.cssText = "font-size:11px;color:#8a5a00;margin:0 0 8px;display:none;";
+  offlinePpuNoteP.textContent = "Doesn't change profit per unit -- this lever is disabled while that goal type is active.";
+  offlineCard.appendChild(offlinePpuNoteP);
+
   // Referenced (when not null) inside recompute() to keep this message in
   // sync as the manual baseline field changes, without rebuilding the
   // whole panel and dropping focus out of the field the CEO is typing in.
   let manualBaselineUsingP = null;
+  // Hoisted the same way, for recompute() to disable when Profit per unit
+  // is active (it only exists when there's no Channel column at all).
+  let manualBaselineInputEl = null;
 
   if (offlineMeasuredUsable) {
     const offlineBaseP = document.createElement("p");
@@ -3091,6 +3273,7 @@ function renderGoalPlanner(container, ctx) {
     bindClampedInput(manualBaselineInput, GOAL_PLANNER_DEFAULTS.offlineManualBaselineRupees, 0, Infinity, v => { inputs.offlineManualBaselineRupees = v; recompute(); });
     manualBaselineCol.appendChild(manualBaselineInput);
     offlineCard.appendChild(manualBaselineCol);
+    manualBaselineInputEl = manualBaselineInput;
 
     manualBaselineUsingP = document.createElement("p");
     manualBaselineUsingP.style.cssText = "font-size:10.5px;color:var(--ink-muted);margin:0 0 10px;";
@@ -3133,27 +3316,281 @@ function renderGoalPlanner(container, ctx) {
     "product margin applies).", true));
   offlineFieldsRow.appendChild(offlineCommissionCol);
 
+  // Profit-per-unit's own two levers -- price reuses the SAME cap field
+  // above (it's the same "how far will you raise price" assumption
+  // either way, same 5% default), cost reduction has no analog in
+  // Revenue/Profit mode at all. Always rendered, so switching goal types
+  // never tears down and rebuilds the panel -- see recompute() for how
+  // this card (and the ad-spend/offline cards above) grey in and out
+  // depending on which goal type is active.
+  const ppuCard = document.createElement("div");
+  ppuCard.style.cssText = "border:1px solid var(--grid);border-radius:8px;padding:12px;background:var(--surface);margin-top:12px;";
+  inputsCard.appendChild(ppuCard);
+
+  const ppuHeading = document.createElement("div");
+  ppuHeading.style.cssText = "font-size:11px;font-weight:600;margin-bottom:8px;";
+  ppuHeading.textContent = "Profit-per-Unit Levers";
+  ppuCard.appendChild(ppuHeading);
+
+  const ppuGateP = document.createElement("p");
+  ppuGateP.className = "chart-caption"; ppuGateP.style.margin = "0 0 8px";
+  ppuGateP.textContent = "Only used in Profit per unit mode -- the \"Max price increase\" cap above is shared with Revenue/Profit mode.";
+  ppuCard.appendChild(ppuGateP);
+
+  const ppuFieldsRow = document.createElement("div");
+  ppuFieldsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:12px;";
+  ppuCard.appendChild(ppuFieldsRow);
+
+  const elasticityCol = fieldCol("Units lost per +1% price");
+  const elasticityInput = document.createElement("input");
+  elasticityInput.type = "number"; elasticityInput.min = "0"; elasticityInput.step = "0.1"; elasticityInput.value = String(inputs.elasticityPerUnit);
+  elasticityInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  bindClampedInput(elasticityInput, GOAL_PLANNER_DEFAULTS.elasticityPerUnit, 0, 100, v => { inputs.elasticityPerUnit = v; recompute(); });
+  elasticityCol.appendChild(elasticityInput);
+  elasticityCol.appendChild(provenanceNote("Assumption -- not measured.", true));
+  ppuFieldsRow.appendChild(elasticityCol);
+
+  const costReductionCol = fieldCol("Cut unit COGS by, %");
+  const costReductionInput = document.createElement("input");
+  costReductionInput.type = "number"; costReductionInput.min = "0"; costReductionInput.max = "100"; costReductionInput.step = "0.5"; costReductionInput.value = String(inputs.costReductionCapPct);
+  costReductionInput.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
+  bindClampedInput(costReductionInput, GOAL_PLANNER_DEFAULTS.costReductionCapPct, 0, 100, v => { inputs.costReductionCapPct = v; recompute(); });
+  costReductionCol.appendChild(costReductionInput);
+  costReductionCol.appendChild(provenanceNote(
+    "Assumption -- what you believe you can negotiate or save. Capped at 0 by default; you must opt in.", true));
+  ppuFieldsRow.appendChild(costReductionCol);
+
   const outputDiv = document.createElement("div");
   outputDiv.style.marginTop = "16px";
   wrap.appendChild(outputDiv);
 
+  // Profit-per-unit's own output builder -- a separate function (never a
+  // branch inside the Revenue/Profit rendering below) so neither can
+  // regress the other. Called from recompute() only when that goal type
+  // is active; costShockPct is passed in rather than recomputed, since
+  // recompute() already derives it once per call for whichever goal type
+  // ends up using it.
+  function renderProfitPerUnitOutputs(costShockPct) {
+    const result = computeProfitPerUnitPlan({
+      dataAvailable: profitPerUnitDataAvailable,
+      aspBaseline: blendedASP, cogsBaseline: blendedUnitCOGS, baselineRevenueNextQ,
+      targetPct: inputs.targetPct, priceCapPct: inputs.priceCapPct,
+      costReductionCapPct: inputs.costReductionCapPct, elasticityPerUnit: inputs.elasticityPerUnit,
+      costShockPct, skuRowsRecent,
+    });
+
+    if (!result.dataAvailable) {
+      const gateBox = document.createElement("div");
+      gateBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:14px;background:#fff6ea;font-size:13px;line-height:1.5;";
+      gateBox.textContent = "Add SKU and Quantity columns in Transactions, with at least one unit sold in your most recent quarter, to unlock Profit per unit.";
+      outputDiv.appendChild(gateBox);
+      return;
+    }
+
+    const outputsHeading = document.createElement("div");
+    outputsHeading.style.cssText = "font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:var(--ink-muted);margin-bottom:8px;";
+    outputsHeading.textContent = "Outputs -- computed separately from your caps above";
+    outputDiv.appendChild(outputsHeading);
+
+    const tilesRow = document.createElement("div");
+    tilesRow.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;";
+    tilesRow.appendChild(tile("Baseline profit/unit", fmtMoney0(result.baselineProfitPerUnit)));
+    tilesRow.appendChild(tile("Target profit/unit", `${fmtMoney0(result.targetProfitPerUnit)} (${result.targetPct >= 0 ? "+" : ""}${result.targetPct.toFixed(1)}%)`));
+    tilesRow.appendChild(tile("Reachable profit/unit within caps", fmtMoney0(result.achievedProfitPerUnit), !result.reachable));
+    outputDiv.appendChild(tilesRow);
+
+    const tilesRow2 = document.createElement("div");
+    tilesRow2.style.cssText = "display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:14px;";
+    tilesRow2.appendChild(tile("Price % used", `+${result.pricePctUsed.toFixed(1)}%`));
+    tilesRow2.appendChild(tile("COGS reduction % used", `-${result.costPctUsed.toFixed(1)}%`));
+    outputDiv.appendChild(tilesRow2);
+
+    // Always shown in this implementation -- this engine has no
+    // seasonality-chained per-month unit forecast to read instead of
+    // deriving units from revenue / ASP (see computeProfitPerUnitPlan()),
+    // so the derivation is never NOT the case here.
+    const unitsNoteP = document.createElement("p");
+    unitsNoteP.className = "chart-caption";
+    unitsNoteP.style.margin = "0 0 10px";
+    unitsNoteP.textContent = "Units are derived from revenue / ASP when real units aren't provided, so this is a mix-weighted figure.";
+    outputDiv.appendChild(unitsNoteP);
+
+    if (result.targetDeltaPerUnit <= 0) {
+      const noFallNote = document.createElement("p");
+      noFallNote.className = "chart-caption";
+      noFallNote.style.margin = "0 0 10px";
+      noFallNote.textContent = "Target is 0% or less -- current levers already meet it with zero effort.";
+      outputDiv.appendChild(noFallNote);
+    }
+
+    if (!result.reachable) {
+      const failBox = document.createElement("div");
+      failBox.style.cssText = "border:1px solid #e0a060;border-radius:8px;padding:14px;background:#fff6ea;font-size:13px;line-height:1.5;";
+      if (result.bindingLimit === "none") {
+        failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
+          `The most you can reach is <strong>${result.maxReachablePct >= 0 ? "+" : ""}${result.maxReachablePct.toFixed(1)}%</strong> -- short of your ` +
+          `<strong>${inputs.targetPct >= 0 ? "+" : ""}${inputs.targetPct.toFixed(1)}%</strong> target. Every lever cap is set to 0, so nothing is ` +
+          `reachable -- raise at least one cap above 0 to make progress.`;
+      } else {
+        const bindingName = result.bindingLimit === "cost" ? "the cost-reduction cap" : "the price cap";
+        failBox.innerHTML = `<strong>Not reachable within your limits.</strong><br>` +
+          `The most you can reach is <strong>${result.maxReachablePct >= 0 ? "+" : ""}${result.maxReachablePct.toFixed(1)}%</strong>, using both ` +
+          `levers fully -- short of your <strong>${inputs.targetPct >= 0 ? "+" : ""}${inputs.targetPct.toFixed(1)}%</strong> target. The binding ` +
+          `limit is <strong>${bindingName}</strong> (it earns more per percentage point of cap than the other lever) -- to go further, raise that cap.`;
+      }
+      outputDiv.appendChild(failBox);
+      return;
+    }
+
+    // Macro offset line -- a separate, always-shown fact about the
+    // External Cost Sensitivity scenario, never baked into the baseline
+    // or plan above (see computeProfitPerUnitPlan()'s own comment).
+    const macroHeading = document.createElement("div");
+    macroHeading.style.cssText = "font-size:12px;font-weight:600;margin:18px 0 4px;";
+    macroHeading.textContent = "Macro Cost-Shock Offset";
+    outputDiv.appendChild(macroHeading);
+    const macroLine = document.createElement("p");
+    macroLine.style.cssText = "font-size:13px;margin:0 0 10px;";
+    if (result.macroOffset) {
+      const mo = result.macroOffset;
+      macroLine.innerHTML = `Under this scenario unit COGS rises <strong>${mo.zPct.toFixed(1)}%</strong>, so profit per unit falls to ` +
+        `<strong>${fmtMoney0(mo.shockedProfitPerUnit)}</strong> (-${mo.fallPct.toFixed(1)}%). To hold profit per unit flat you'd need a price ` +
+        `rise of <strong>${mo.priceRiseNeededPct.toFixed(1)}%</strong> (with your elasticity assumption).`;
+    } else {
+      macroLine.className = "chart-caption";
+      macroLine.textContent = "Set an External Cost scenario to see this.";
+    }
+    outputDiv.appendChild(macroLine);
+
+    // Per-month table -- reuses the SAME 3-month split as Revenue/Profit
+    // mode (seasonalBaseline.perMonth), never a separate derivation.
+    const monthlyHeading = document.createElement("div");
+    monthlyHeading.style.cssText = "font-size:12px;font-weight:600;margin:18px 0 4px;";
+    monthlyHeading.textContent = "Monthly Split";
+    outputDiv.appendChild(monthlyHeading);
+    const monthlySub = document.createElement("p");
+    monthlySub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;";
+    monthlySub.textContent = "Baselines come straight from the Demand Forecast panel above (same Seasonality Source). Price and COGS effects " +
+      "are exact per month -- each month's own baseline units × the price %/cost-reduction % used, never evenly split.";
+    outputDiv.appendChild(monthlySub);
+
+    const monthlyBase = seasonalBaseline.perMonth;
+    const totalBaselineRevenueForSplit = sum(monthlyBase, m => m.value) || 1;
+    const monthlyRowsData = monthlyBase.map(m => {
+      const share = m.value / totalBaselineRevenueForSplit;
+      const monthUnits = result.unitsBaselineNextQ * share;
+      const baselineCM1 = monthUnits * result.baselineProfitPerUnit;
+      const priceEffect = monthUnits * (result.aspBaseline * result.pricePctUsed) / 100;
+      const costEffect = monthUnits * (result.cogsBaseline * result.costPctUsed) / 100;
+      const achievedCM1 = baselineCM1 + priceEffect + costEffect;
+      const achievedProfitPerUnitMonth = monthUnits > 0 ? achievedCM1 / monthUnits : result.achievedProfitPerUnit;
+      return {
+        monthLabel: `${monthName(m.month)} ${m.month.split("-")[0]}`,
+        monthUnits, baselineCM1, priceEffect, costEffect, achievedCM1, achievedProfitPerUnitMonth,
+      };
+    });
+    const monthlyTable = document.createElement("table");
+    monthlyTable.className = "data-table";
+    monthlyTable.style.fontSize = "12px";
+    const monthlyRowsHtml = monthlyRowsData.map(d => `
+      <tr>
+        <td>${d.monthLabel}</td>
+        <td class="num">${commas(Math.round(d.monthUnits))}</td>
+        <td class="num">${fmtMoney0(d.baselineCM1)}</td>
+        <td class="num">${fmtMoney0(d.priceEffect)}</td>
+        <td class="num">${fmtMoney0(d.costEffect)}</td>
+        <td class="num" style="background:#eafaf0;">${fmtMoney0(d.achievedCM1)}</td>
+        <td class="num" style="background:#eafaf0;">${fmtMoney0(d.achievedProfitPerUnitMonth)}</td>
+      </tr>`).join("");
+    monthlyTable.innerHTML = `<thead><tr><th>Month</th><th>Baseline units</th><th>Baseline CM1</th><th>Price effect</th>` +
+      `<th>COGS effect</th><th>Achieved CM1</th><th>Achieved profit/unit</th></tr></thead><tbody>${monthlyRowsHtml}</tbody>`;
+    outputDiv.appendChild(monthlyTable);
+
+    const monthlyNote = document.createElement("p");
+    monthlyNote.className = "chart-caption";
+    monthlyNote.style.marginTop = "8px";
+    monthlyNote.textContent = "Baseline units and Baseline CM1 sum to the quarter figures above; Price effect and COGS effect are each " +
+      "month's own baseline units × the price %/cost-reduction % used -- exact, never evenly split.";
+    outputDiv.appendChild(monthlyNote);
+
+    // Per-SKU table -- same visual style as the Production Plan below (in
+    // Revenue/Profit mode): the SAME uniform price %/cost-reduction %
+    // above, applied to each SKU's own real recent-quarter ASP and unit
+    // COGS, never re-derived per SKU.
+    const skuHeading = document.createElement("div");
+    skuHeading.style.cssText = "font-size:12px;font-weight:600;margin:18px 0 4px;";
+    skuHeading.textContent = "Per-SKU Profit per Unit";
+    outputDiv.appendChild(skuHeading);
+    const skuSub = document.createElement("p");
+    skuSub.style.cssText = "font-size:11px;color:var(--ink-secondary);margin:0 0 8px;";
+    skuSub.textContent = "The same price %/cost-reduction % above, applied to each SKU's own recent-quarter ASP and unit COGS -- never " +
+      "re-derived per SKU.";
+    outputDiv.appendChild(skuSub);
+    const skuTable = document.createElement("table");
+    skuTable.className = "data-table data-table-col-sep";
+    skuTable.style.fontSize = "12px";
+    const skuRowsHtml = result.perSku.map(r => `
+      <tr>
+        <td>${r.sku}</td>
+        <td class="num">${fmtMoney0(r.aspBefore)}</td>
+        <td class="num">${fmtMoney0(r.aspAfter)}</td>
+        <td class="num">${fmtMoney0(r.cogsBefore)}</td>
+        <td class="num">${fmtMoney0(r.cogsAfter)}</td>
+        <td class="num">${fmtMoney0(r.profitUnitBefore)}</td>
+        <td class="num" style="background:#eafaf0;">${fmtMoney0(r.profitUnitAfter)}</td>
+      </tr>`).join("");
+    skuTable.innerHTML = `<thead><tr><th>SKU</th><th>ASP</th><th>New ASP</th><th>Unit COGS</th><th>New unit COGS</th>` +
+      `<th>Profit/unit before</th><th>Profit/unit after</th></tr></thead><tbody>${skuRowsHtml}</tbody>`;
+    outputDiv.appendChild(skuTable);
+  }
+
   function recompute() {
+    const isPPU = inputs.goalType === "profit_per_unit";
     goalModeNote.textContent = inputs.goalType === "revenue"
       ? "Revenue mode: measured against your forecasted next-quarter revenue."
-      : `Profit mode: baseline profit = forecasted revenue × your MEASURED overall gross margin (${fmtPct1(ctx.marginPct)}), computed from your real cost data. The ad-spend lever nets its own extra spend out of profit.`;
+      : inputs.goalType === "profit"
+      ? `Profit mode: baseline profit = forecasted revenue × your MEASURED overall gross margin (${fmtPct1(ctx.marginPct)}), computed from your real cost data. The ad-spend lever nets its own extra spend out of profit.`
+      : `Profit-per-unit mode: baseline profit/unit = your recent quarter's blended ASP minus blended unit COGS (${fmtMoney0(blendedASP)} − ${fmtMoney0(blendedUnitCOGS)}). Ad-spend and offline don't apply -- only price and cost reduction move profit per unit.`;
+
+    targetLabelEl.textContent = isPPU
+      ? "Grow profit per unit by, % (negative allowed = limit the fall)"
+      : "Target growth, next quarter (%)";
+
+    // Ad-spend and offline have no per-unit mechanism, so they're greyed
+    // out with an honest reason while Profit per unit is active -- never
+    // silently inert.
+    adPpuNoteP.style.display = isPPU ? "" : "none";
+    offlinePpuNoteP.style.display = isPPU ? "" : "none";
+    adCard.style.opacity = isPPU ? "0.5" : "1";
+    offlineCard.style.opacity = isPPU ? "0.5" : "1";
+    adCapInput.disabled = isPPU || !adUsable;
+    declineInput.disabled = isPPU || !adUsable;
 
     // Refresh the offline lever's derived state -- it depends on
     // inputs.offlineManualBaselineRupees, which may have just changed, so
     // the cap/commission fields' enabled state and the confirmation note
     // below must never lag a stale read from the initial render.
     ({ manualUsable: offlineManualUsable, usable: offlineUsable, baselineRevenue: offlineBaselineRevenue } = deriveOfflineUsable());
-    offlineCapInput.disabled = !offlineUsable;
-    offlineCommissionInput.disabled = !offlineUsable;
+    offlineCapInput.disabled = isPPU || !offlineUsable;
+    offlineCommissionInput.disabled = isPPU || !offlineUsable;
+    if (manualBaselineInputEl) manualBaselineInputEl.disabled = isPPU;
     if (manualBaselineUsingP) {
       manualBaselineUsingP.style.display = offlineManualUsable ? "" : "none";
       manualBaselineUsingP.textContent = offlineManualUsable
         ? `Using ${fmtMoney0(inputs.offlineManualBaselineRupees)} as your quarterly offline baseline -- your assumption, not measured from your data.`
         : "";
+    }
+
+    // Profit-per-unit's own two levers only matter in that mode.
+    elasticityInput.disabled = !isPPU;
+    costReductionInput.disabled = !isPPU;
+
+    const costShockPct = computeCostShockPct(sensitivityRows);
+    outputDiv.innerHTML = "";
+
+    if (isPPU) {
+      renderProfitPerUnitOutputs(costShockPct);
+      return;
     }
 
     const result = computeGoalPaths({
@@ -3165,13 +3602,11 @@ function renderGoalPlanner(container, ctx) {
       offlineAvailable: offlineUsable, offlineBaselineRevenue,
       offlineCapPct: inputs.offlineCapPct, offlineCommissionPct: inputs.offlineCommissionPct,
     });
-    // Macro Stress Test: the SAME combined cost-shock % External Cost
-    // Sensitivity computes from the CEO's own factor rows (never
-    // re-derived here) -- see computeCostShockPct(). A fraction, e.g.
-    // 0.03 for a 3% cost increase; 0 whenever no scenario is set.
-    const costShockPct = computeCostShockPct(sensitivityRows);
-
-    outputDiv.innerHTML = "";
+    // costShockPct (the SAME combined cost-shock % External Cost
+    // Sensitivity computes from the CEO's own factor rows, never
+    // re-derived here -- see computeCostShockPct()) and outputDiv's reset
+    // both already happened above, before the goalType branch, since the
+    // Profit-per-unit path needs them too.
 
     if (result.baselineInvalid) {
       const invalidBox = document.createElement("div");

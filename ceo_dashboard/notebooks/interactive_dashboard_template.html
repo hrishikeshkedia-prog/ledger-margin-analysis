@@ -521,6 +521,11 @@ function nextMonthStr(monthStr) {
   m += 1; if (m > 12) { m = 1; y += 1; }
   return y + "-" + String(m).padStart(2, "0");
 }
+function prevMonthStr(monthStr) {
+  let [y, m] = monthStr.split("-").map(Number);
+  m -= 1; if (m < 1) { m = 12; y -= 1; }
+  return y + "-" + String(m).padStart(2, "0");
+}
 // Canonicalizes any date-ish month value (e.g. "2026-05", "2026-05-01",
 // "05/01/2026") to the same "YYYY-MM" shape monthKey(date) produces from
 // Transactions rows. Needed anywhere a month key from one file (e.g.
@@ -2010,9 +2015,14 @@ function renderCohort(container, ctx) {
 //                    prior-years rule -- never invents a seasonal spike for
 //                    a month that hasn't earned one.
 //   mode "manual" -- Option A: the CEO types an expected % change for each
-//                    of the next 3 months (default 0, i.e. flat trend);
-//                    applied to that month's TREND run-rate, replacing
-//                    whatever the algorithm would have used.
+//                    of the next 3 months (default 0, i.e. flat vs the
+//                    previous month). CHAINED, not independent: each %
+//                    applies to the PREVIOUS month's own resulting
+//                    baseline (actual, where the last actual month is
+//                    immediately before the forecast window; that
+//                    month's trend run-rate otherwise), so month 2 builds
+//                    on month 1's result and month 3 on month 2's -- see
+//                    buildChainedManualPerMonth().
 let seasonalitySource = { mode: "auto", monthPcts: [0, 0, 0] };
 // The most recent renderAll() context, so a change to seasonalitySource can
 // refresh both dependent panels without forcing a full page re-render (and
@@ -2112,23 +2122,51 @@ function refreshGoalPlannerFromSensitivity() {
 // truth both renderForecast()'s "Baseline used for planning" block and
 // renderGoalPlanner() read -- they never compute this independently, so
 // they can't silently disagree.
+// "I'll set it" mode's own chaining: each month's % is a change vs the
+// PREVIOUS month's own resulting baseline, not an independent % over that
+// month's trend run-rate -- month 2 builds on month 1's result, month 3 on
+// month 2's. Anchored at the actual last month's revenue when that month is
+// immediately before the first forecast month; otherwise (a gap, or no
+// actual month at all) anchored at the first month's own trend run-rate
+// instead, labeled as such, so the chain never starts from an invented or
+// NaN number.
+function buildChainedManualPerMonth(monthsWithTrend, monthPcts, lastActual) {
+  const firstMonth = monthsWithTrend[0].month;
+  const hasContiguousActual = !!lastActual && nextMonthStr(lastActual.month) === firstMonth;
+  let prev = hasContiguousActual ? lastActual.netRevenue : monthsWithTrend[0].trendValue;
+  let prevLabelText = hasContiguousActual
+    ? `${monthName(lastActual.month)} ${calYearNum(lastActual.month)} actual of ${fmtMoney0(prev)}`
+    : null;
+  return monthsWithTrend.map((mt, i) => {
+    const pct = monthPcts[i] || 0;
+    const value = Math.max(0, prev * (1 + pct / 100));
+    let detail = (i === 0 && !hasContiguousActual)
+      ? "no actual for the previous month -- trend run-rate used as the anchor"
+      : `your input: ${pct >= 0 ? "+" : ""}${pct}% on ${prevLabelText}`;
+    if (mt.showTrendRef) detail += ` (tool's trend projection: ${fmtMoney0(mt.trendValue)}, reference only -- never used in the math)`;
+    prev = value;
+    prevLabelText = `${monthName(mt.month)} ${calYearNum(mt.month)} (your projected ${fmtMoney0(value)})`;
+    return { month: mt.month, value, detail };
+  });
+}
+
 function computeSeasonalityBaseline(ctx, choice) {
   const monthsInWindow = Math.max(1, ctx.revenueTrend.length);
   const hasForecast = ctx.forecast && !ctx.forecast.tooThin;
+  const lastActual = ctx.revenueTrend.length ? ctx.revenueTrend[ctx.revenueTrend.length - 1] : null;
 
   if (!hasForecast) {
     // Not enough history to fit a trend at all -- both options fall back to
     // a flat run-rate for 3 nominally-future months, clearly labeled as
     // such rather than dressed up as either a trend or a seasonal forecast.
     const flatMonthly = ctx.netRevenue / monthsInWindow;
-    let lastMonth = ctx.revenueTrend.length ? ctx.revenueTrend[ctx.revenueTrend.length - 1].month : monthKey(new Date());
+    let lastMonth = lastActual ? lastActual.month : monthKey(new Date());
     const months = [];
     for (let i = 0; i < 3; i++) { lastMonth = nextMonthStr(lastMonth); months.push(lastMonth); }
     if (choice.mode === "manual") {
-      const perMonth = months.map((m, i) => {
-        const pct = choice.monthPcts[i] || 0;
-        return { month: m, value: Math.max(0, flatMonthly * (1 + pct / 100)), detail: `your input: ${pct >= 0 ? "+" : ""}${pct}% on a flat run-rate of ${fmtMoney0(flatMonthly)} (not enough history for a trend fit)` };
-      });
+      const perMonth = buildChainedManualPerMonth(
+        months.map(m => ({ month: m, trendValue: flatMonthly, showTrendRef: false })),
+        choice.monthPcts, lastActual);
       return { perMonth, total: sum(perMonth, m => m.value), sourceLabel: "Your seasonal expectation -- your input, not a model prediction.", isSeasonalForecast: false, mode: "manual" };
     }
     const perMonth = months.map(m => ({ month: m, value: flatMonthly, detail: "flat run-rate -- not enough history for a trend fit" }));
@@ -2137,11 +2175,9 @@ function computeSeasonalityBaseline(ctx, choice) {
 
   const revForward = ctx.forecast.revForward;
   if (choice.mode === "manual") {
-    const perMonth = revForward.map((f, i) => {
-      const pct = choice.monthPcts[i] || 0;
-      const value = Math.max(0, f.trendValue * (1 + pct / 100));
-      return { month: f.month, value, detail: `your input: ${pct >= 0 ? "+" : ""}${pct}% on trend run-rate of ${fmtMoney0(f.trendValue)}` };
-    });
+    const perMonth = buildChainedManualPerMonth(
+      revForward.map(f => ({ month: f.month, trendValue: f.trendValue, showTrendRef: true })),
+      choice.monthPcts, lastActual);
     return { perMonth, total: sum(perMonth, m => m.value), sourceLabel: "Your seasonal expectation -- your input, not a model prediction.", isSeasonalForecast: false, mode: "manual" };
   }
 
@@ -2216,12 +2252,23 @@ function renderSeasonalitySourceBlock(container, ctx, onBaselineChange) {
 
   const monthInputs = [];
   futureMonths.forEach((m, i) => {
-    const col = fieldCol(`${monthName(m)} ${m.split("-")[0]} expected change, %`);
+    // Label names the REAL previous month the % is chained against -- for
+    // month 1 that's the calendar month before the first forecast month
+    // (whether or not actuals exist for it; the results table's detail
+    // column says so when they don't), for months 2/3 it's the prior
+    // forecast month itself.
+    const prevMonthForLabel = i === 0 ? prevMonthStr(futureMonths[0]) : futureMonths[i - 1];
+    const col = fieldCol(`${monthName(m)} ${calYearNum(m)} expected change vs ${monthName(prevMonthForLabel)} ${calYearNum(prevMonthForLabel)}, %`);
     const inp = document.createElement("input");
     inp.type = "number"; inp.step = "1"; inp.value = String(seasonalitySource.monthPcts[i] || 0);
     inp.style.cssText = "width:100%;padding:6px;border:1px solid var(--grid);border-radius:4px;box-sizing:border-box;";
-    inp.addEventListener("input", () => {
-      seasonalitySource.monthPcts[i] = Number(inp.value) || 0;
+    // Blank/invalid reverts to 0% (flat vs the previous month) -- never a
+    // silent NaN. Allows negative values; clamped to [-90, 500] since
+    // beyond that range "vs the previous month" stops being a realistic
+    // business input, and the clamped value is written back so the field
+    // never shows a number the chain isn't actually using.
+    bindClampedInput(inp, 0, -90, 500, v => {
+      seasonalitySource.monthPcts[i] = v;
       recomputeBaseline();
       refreshSeasonalityDependents();
     });
@@ -2229,7 +2276,8 @@ function renderSeasonalitySourceBlock(container, ctx, onBaselineChange) {
     monthInputs.push(inp);
     manualFieldsRow.appendChild(col);
   });
-  const manualNote = provenanceNote("Your seasonal expectation -- your input, not a model prediction.", true);
+  const manualNote = provenanceNote("Your seasonal expectation -- your input, not a model prediction. Each % is against the PREVIOUS " +
+    "month (not the trend line), and compounds across the three months: month 2 builds on month 1's result, month 3 on month 2's.", true);
   manualNote.style.gridColumn = "1 / -1";
   manualFieldsRow.appendChild(manualNote);
 

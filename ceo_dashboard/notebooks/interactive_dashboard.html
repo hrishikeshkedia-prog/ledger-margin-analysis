@@ -1633,18 +1633,55 @@ function renderScorecard(container, ctx) {
 
     // CM2 = CM1 - advertising spend, whole-business only -- ad spend has no
     // per-product attribution in this engine, so CM2 never gets a per-SKU
-    // breakdown (see the SKU table, which stops at CM1).
-    const cm2InfoText = "CM1 minus advertising spend (whole-business). Company-level only -- ad spend can't be split per product.";
-    if (cov.marketing) {
-      const totalAdSpend = sum(mkt, m => m.spend);
-      const cm2Abs = marginAbs - totalAdSpend;
-      const cm2Pct = netRevenue ? cm2Abs / netRevenue : 0;
-      tiles.push(["CM2 %", fmtPct1(cm2Pct), cm2Abs < 0, cm2InfoText]);
-      tiles.push(["CM2 (window)", fmtCr(cm2Abs), cm2Abs < 0, cm2InfoText]);
-    } else {
+    // breakdown (see the SKU table, which stops at CM1). Gated on
+    // cov.adSpend (Marketing Spend file loaded + Spend mapped), NEVER
+    // cov.marketing (Transactions' own Channel column) -- CM2 is a
+    // whole-business figure and has no dependency on Channel at all; that
+    // was the bug. Channel Economics (cov.marketing, elsewhere) is
+    // untouched.
+    const cm2BaseInfoText = "CM1 minus advertising spend (whole-business). Company-level only -- ad spend can't be split per product.";
+    if (!cov.marketingFileLoaded) {
       const cm2Placeholder = "Load a Marketing Spend file to compute CM2.";
-      tiles.push(["CM2 %", cm2Placeholder, false, cm2InfoText]);
-      tiles.push(["CM2 (window)", cm2Placeholder, false, cm2InfoText]);
+      tiles.push(["CM2 %", cm2Placeholder, false, cm2BaseInfoText]);
+      tiles.push(["CM2 (window)", cm2Placeholder, false, cm2BaseInfoText]);
+    } else if (!cov.adSpendMapped) {
+      const cm2Placeholder = "Marketing Spend file loaded, but the Spend column isn't mapped. Map it and click Apply.";
+      tiles.push(["CM2 %", cm2Placeholder, false, cm2BaseInfoText]);
+      tiles.push(["CM2 (window)", cm2Placeholder, false, cm2BaseInfoText]);
+    } else if (!cov.marketingChannelMapped) {
+      // MKT_ROLES requires BOTH Channel and Spend on the Marketing Spend
+      // file's own mapping before any row is built at all (channel is
+      // needed elsewhere, e.g. per-channel CAC) -- Spend alone being
+      // mapped isn't enough to produce usable rows yet.
+      const cm2Placeholder = "Marketing Spend file loaded, but the Channel column isn't mapped (needed before any row can be read). Map it and click Apply.";
+      tiles.push(["CM2 %", cm2Placeholder, false, cm2BaseInfoText]);
+      tiles.push(["CM2 (window)", cm2Placeholder, false, cm2BaseInfoText]);
+    } else {
+      // Window alignment: only count marketing spend whose month falls
+      // inside the SAME months Gross Margin/CM1 above are computed over
+      // (every month in the loaded Transactions window, not a recent-
+      // quarter slice) -- spend from months outside that window isn't
+      // "this window's" ad cost. mkt rows' .month is already normMonthKey()'d
+      // by buildMarketing(), and is null on every row when Month isn't
+      // mapped at all (never a fake sentinel), so a single check on the
+      // first row tells us which case this file is in.
+      const windowMonths = new Set(revenueTrend.map(r => r.month));
+      const mktMonthMapped = mkt.length > 0 && mkt[0].month !== null;
+      const spendRows = mktMonthMapped ? mkt.filter(m => windowMonths.has(m.month)) : mkt;
+      if (spendRows.length === 0) {
+        const cm2Placeholder = "No marketing spend falls inside the loaded sales window.";
+        tiles.push(["CM2 %", cm2Placeholder, false, cm2BaseInfoText]);
+        tiles.push(["CM2 (window)", cm2Placeholder, false, cm2BaseInfoText]);
+      } else {
+        const totalAdSpend = sum(spendRows, m => m.spend);
+        const cm2Abs = marginAbs - totalAdSpend;
+        const cm2Pct = netRevenue ? cm2Abs / netRevenue : 0;
+        const cm2InfoText = mktMonthMapped
+          ? `${cm2BaseInfoText} Spend used: ${fmtMoney0(totalAdSpend)} across ${Array.from(new Set(spendRows.map(m => m.month))).sort().join(", ")}.`
+          : `${cm2BaseInfoText} Spend used: ${fmtMoney0(totalAdSpend)} (spend not date-matched to the sales window -- no Month column mapped on the Marketing Spend file).`;
+        tiles.push(["CM2 %", fmtPct1(cm2Pct), cm2Abs < 0, cm2InfoText]);
+        tiles.push(["CM2 (window)", fmtCr(cm2Abs), cm2Abs < 0, cm2InfoText]);
+      }
     }
   }
   if (cov.sku) {
@@ -4449,6 +4486,15 @@ function computeCoverage(state) {
     customerId: !!m.customerId,
     channel: !!m.channel,
     marketing: !!m.channel && state.mkt.length > 0,
+    // CM2 (whole-business CM1 minus ad spend) has nothing to do with
+    // whether Transactions' own Channel column is mapped -- that's purely
+    // a Channel-Economics-panel concern (cov.marketing above, left
+    // untouched). CM2 only needs the Marketing Spend file itself to have
+    // produced rows with a mapped Spend column.
+    marketingFileLoaded: !!state.rawMkt,
+    adSpendMapped: !!(state.mappingMkt && state.mappingMkt.spend),
+    marketingChannelMapped: !!(state.mappingMkt && state.mappingMkt.channel),
+    adSpend: state.mkt.length > 0 && !!(state.mappingMkt && state.mappingMkt.spend),
     inventory: state.inv.length > 0,
     note: !!m.note,
     costBreakdown: state.costBreakdown.length > 0,
